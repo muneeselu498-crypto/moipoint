@@ -15,8 +15,9 @@ function mpStubAccount(){return {id:'A0',name:'',status:'active',plan:'free',sub
 /* an empty app, used for the moment before the server answers */
 function mpShell(){return {seq:1000,evSeq:0,evNo3:1,moiNo2:1,v31msg:1,v45:1,v46:1,v50:1,v54:1,pplV45:1,users:[],accounts:[mpStubAccount()],events:[],eventUsers:[],moi:[],expenses:[],payouts:[],guests:[],ggroups:[],reminders:[],notifications:[],msgLog:[],audit:[],queue:[],people:{},platform:{}}}
 
-async function mpApi(url,body){
-  const r=await fetch(url,{method:body===undefined?'GET':'POST',credentials:'same-origin',headers:{'content-type':'application/json','x-moipoint':'1'},body:body===undefined?undefined:JSON.stringify(body)});
+async function mpApi(url,body,ms=30000){
+  const ctl=new AbortController(),t=setTimeout(()=>ctl.abort(),ms);
+  const r=await fetch(url,{signal:ctl.signal,method:body===undefined?'GET':'POST',credentials:'same-origin',headers:{'content-type':'application/json','x-moipoint':'1'},body:body===undefined?undefined:JSON.stringify(body)}).finally(()=>clearTimeout(t));
   let j=null;try{j=await r.json()}catch(_){}
   if(!r.ok){const e=new Error((j&&j.error)||'Something went wrong. Please try again.');e.status=r.status;e.data=j;throw e}
   return j}
@@ -123,15 +124,20 @@ function mpSessionLost(){if(!me)return;const id=me.id;me=null;if(MPS.es){MPS.es.
 
 async function mpBoot(){
   let sid=null;try{sid=localStorage.getItem(SK)||sessionStorage.getItem(SK)}catch(_){}
+  const saved=!!(sid&&me);
+  /* a returning person sees their saved copy at once, however slow the venue's network is */
+  if(saved)render();else $('#root').innerHTML='<div style="min-height:100vh;display:grid;place-items:center;color:#64638A;font:15px system-ui,sans-serif">Loading Moi Point…</div>';
   /* anything saved here while offline goes up first, before fresh data replaces it */
-  try{const b=localStorage.getItem(MP_BASE_KEY);if(sid&&me&&b){MPS.base=new Map(JSON.parse(b));MPS.ready=true;MPS.rev=0;const {payload,empty}=mpCollect();if(!empty&&online())await mpApi('/api/sync',payload)}}catch(_){}
+  try{const b=localStorage.getItem(MP_BASE_KEY);if(saved&&b){MPS.base=new Map(JSON.parse(b));MPS.ready=true;const {payload,empty}=mpCollect();MPS.ready=false;if(!empty&&online())await mpApi('/api/sync',payload,12000)}}catch(_){}
+  let fresh=false;
   try{
-    const r=await mpApi('/api/state');mpApplyState(r);
+    const r=await mpApi('/api/state',undefined,12000);mpApplyState(r);fresh=true;
     try{if(r.imp)sessionStorage.setItem('mp-imp',r.imp);else sessionStorage.removeItem('mp-imp')}catch(_){}
     if(!me){try{localStorage.removeItem(SK);sessionStorage.removeItem(SK)}catch(_){}}
     else{try{ctxApply()}catch(_){}mpStream()}
   }catch(e){/* no server reachable: the saved copy keeps the counter working */}
-  MPS.ready=true;render()}
+  MPS.ready=true;
+  if(fresh&&saved&&me)mpRefresh();else render()}
 
 {const _s=save;save=function(){_s();if(MPS.ready&&me)mpSoon()}}
 

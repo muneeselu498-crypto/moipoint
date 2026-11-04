@@ -87,7 +87,7 @@ const FNIC={
 const FNICL=[['wedding','Wedding rings'],['reception','Reception toast'],['engagement','Engagement ring'],['bangles','Bangles (Valaikappu)'],['cake','Birthday cake'],['house','House with toran'],['ear','Ear with stud'],['lotus','Lotus'],['sixty','60 badge'],['temple','Temple tower'],['baby','Baby'],['sparkle','Sparkle'],['hall','Hall'],['family','Family'],['gift','Gift'],['heart','Heart'],['users','People'],['bell','Bell'],['cal','Calendar']];
 const wic=(k,s=22)=>FNIC[k]?`<svg width="${s}" height="${s}" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true">${FNIC[k]}</svg>`:ic(k||'sparkle',s);
 const wim=k=>!k?'':String(k).startsWith('data:')?k:SH(k);
-const maskMob=m=>{const d=String(m||'').replace(/\D/g,'').slice(-10);return d.length<10?d:d.slice(0,3)+'** **'+d.slice(-3)};
+const maskMob=m=>{if(String(m||'').includes('*'))return String(m);const d=String(m||'').replace(/\D/g,'').slice(-10);return d.length<10?d:d.slice(0,3)+'** **'+d.slice(-3)};
 function WEBDEF(){return {
  slides:[
   {id:'s1',tag:'For weddings and every function',title:'Every Moi recorded. Every function accounted for.',sub:'Receive Moi at the counter, send receipts, track expenses and returns, and close the accounts the same night.',layout:'people',img:'couple',shot:'ip-receive',btn:'Start free',link:'signup',on:1},

@@ -73,4 +73,5 @@ const cmd = process.argv[2] || 'status';
 if (cmd === 'start') await start();
 else if (cmd === 'stop') stop();
 else if (cmd === 'reset') await reset();
+else if (cmd === 'sql') console.log(run('psql', ['-h', 'localhost', '-p', String(PORT), '-U', USER, '-d', 'postgres', '-c', process.argv[3]]));
 else console.log((await listening()) ? `running on ${PORT}` : 'stopped');
