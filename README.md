@@ -99,6 +99,7 @@ The server treats every browser as untrusted. It decides who sees what (`whereFo
 npm test             everything
 npm run test:api     server rules only
 npm run test:ui      real browser tests only
+npm run test:prod    the app with testing tools off, as on a real server
 ```
 
 They run on a throwaway database, so your data is safe. The browser tests use the Chrome installed on this computer.

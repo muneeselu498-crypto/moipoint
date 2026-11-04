@@ -12,6 +12,9 @@ import { SyncService } from './sync.service';
 import { addDays, fail, mobOk, normMob, today, uid } from './util';
 import { priceOf } from './wallet';
 
+/** Simulated payments exist only for testing. Left on by mistake on a real server, they would mean free credits. */
+const paymentsOpen = () => cfg.paymentProvider === 'simulate' && cfg.devTools;
+
 const parse = <T>(schema: z.ZodType<T>, body: unknown): T => {
   const r = schema.safeParse(body);
   return r.success ? r.data : fail('Please check the details and try again.');
@@ -37,7 +40,7 @@ export class AccountController {
     const b = parse(z.object({ accountId: z.string(), qty: z.number().int().min(100).max(10000000), code: z.string().max(40).nullable().optional() }), body);
     const manager = Object.values(s.helperOn).some((h) => h.role === 'manager' && h.accountId === b.accountId);
     if (!s.ownerOf.includes(b.accountId) && !manager) fail('Only the owner or an Event Admin can buy credits.', 403);
-    if (cfg.paymentProvider !== 'simulate') fail('Online payment isn’t connected yet.', 503);
+    if (!paymentsOpen()) fail('Online payment isn’t connected yet.', 503);
 
     const out = await this.prisma.$transaction(async (tx) => {
       const rev = await this.messages.bump(tx);
@@ -80,7 +83,7 @@ export class AccountController {
     const b = parse(z.object({ plan: z.string().max(30) }), body);
     const accId = s.ownerOf[0];
     if (!accId) return fail('Only the owner can change the plan.', 403);
-    if (cfg.paymentProvider !== 'simulate') fail('Online payment isn’t connected yet.', 503);
+    if (!paymentsOpen()) fail('Online payment isn’t connected yet.', 503);
     const out = await this.prisma.$transaction(async (tx) => {
       const rev = await this.messages.bump(tx);
       const plans: any = (await tx.platformDoc.findUnique({ where: { key: 'plans' } }))?.data ?? {};

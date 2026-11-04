@@ -34,8 +34,20 @@ for (let i = 0; i < 60; i++) {
   await new Promise((r) => setTimeout(r, 500));
 }
 
+// a second copy with testing tools off, exactly as a real server would run
+const PROD_PORT = 4611;
+const prod = spawn('node', ['dist/main.js'], { cwd: api, env: { ...env, PORT: String(PROD_PORT), DEV_TOOLS: '0', PUBLIC_URL: `http://localhost:${PROD_PORT}` }, stdio: 'ignore' });
+process.on('exit', () => prod.kill());
+for (let i = 0; i < 60; i++) {
+  const ok = await fetch(`http://localhost:${PROD_PORT}/api/state`).then((r) => r.ok).catch(() => false);
+  if (ok) break;
+  await new Promise((r) => setTimeout(r, 500));
+}
+
 const which = process.argv[2];
-const files = which === 'api' ? ['tests/api.test.mjs'] : which === 'ui' ? ['tests/ui.test.mjs'] : ['tests/api.test.mjs', 'tests/ui.test.mjs'];
-const run = spawnSync('node', ['--test', '--test-concurrency=1', ...files], { cwd: root, env: { ...env, BASE: `http://localhost:${PORT}` }, stdio: 'inherit' });
+const sets = { api: ['tests/api.test.mjs'], ui: ['tests/ui.test.mjs'], prod: ['tests/prod.test.mjs'] };
+const files = sets[which] ?? [...sets.api, ...sets.ui, ...sets.prod];
+const run = spawnSync('node', ['--test', '--test-concurrency=1', ...files], { cwd: root, env: { ...env, BASE: `http://localhost:${PORT}`, PROD_BASE: `http://localhost:${PROD_PORT}` }, stdio: 'inherit' });
 stop();
+prod.kill();
 process.exit(run.status ?? 1);

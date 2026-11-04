@@ -17,7 +17,8 @@
     "build:web": "node apps/web/build.mjs",
     "reset": "node scripts/db.mjs reset",
     "db:start": "node scripts/db.mjs start",
-    "db:stop": "node scripts/db.mjs stop"
+    "db:stop": "node scripts/db.mjs stop",
+    "test:prod": "node scripts/test.mjs prod"
   },
   "devDependencies": {
     "playwright-core": "^1.64.1"
