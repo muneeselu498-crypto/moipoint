@@ -1,0 +1,14 @@
+{
+  "name": "moi-point",
+  "private": true,
+  "version": "1.0.0",
+  "description": "Moi Point: record every Moi, send receipts and close the accounts the same night.",
+  "workspaces": ["apps/*"],
+  "engines": { "node": ">=20" },
+  "scripts": {
+    "build:web": "node apps/web/build.mjs",
+    "db:start": "node scripts/db.mjs start",
+    "db:stop": "node scripts/db.mjs stop",
+    "db:reset": "node scripts/db.mjs reset"
+  }
+}

@@ -1,0 +1,135 @@
+{
+ "tail": ";",
+ "items": [
+  {
+   "key": "desk-dash",
+   "mime": "image/webp",
+   "file": "desk-dash.webp"
+  },
+  {
+   "key": "desk-event",
+   "mime": "image/webp",
+   "file": "desk-event.webp"
+  },
+  {
+   "key": "desk-guests",
+   "mime": "image/webp",
+   "file": "desk-guests.webp"
+  },
+  {
+   "key": "desk-book",
+   "mime": "image/webp",
+   "file": "desk-book.webp"
+  },
+  {
+   "key": "desk-list",
+   "mime": "image/webp",
+   "file": "desk-list.webp"
+  },
+  {
+   "key": "ip-receive",
+   "mime": "image/webp",
+   "file": "ip-receive.webp"
+  },
+  {
+   "key": "ip-wizard",
+   "mime": "image/webp",
+   "file": "ip-wizard.webp"
+  },
+  {
+   "key": "ip-payouts",
+   "mime": "image/webp",
+   "file": "ip-payouts.webp"
+  },
+  {
+   "key": "ip-guest",
+   "mime": "image/webp",
+   "file": "ip-guest.webp"
+  },
+  {
+   "key": "ip-event",
+   "mime": "image/webp",
+   "file": "ip-event.webp"
+  },
+  {
+   "key": "an-receipt",
+   "mime": "image/webp",
+   "file": "an-receipt.webp"
+  },
+  {
+   "key": "an-qr",
+   "mime": "image/webp",
+   "file": "an-qr.webp"
+  },
+  {
+   "key": "an-qrpage",
+   "mime": "image/webp",
+   "file": "an-qrpage.webp"
+  },
+  {
+   "key": "an-expenses",
+   "mime": "image/webp",
+   "file": "an-expenses.webp"
+  },
+  {
+   "key": "rx-temple",
+   "mime": "image/webp",
+   "file": "rx-temple.webp"
+  },
+  {
+   "key": "rx-royal",
+   "mime": "image/webp",
+   "file": "rx-royal.webp"
+  },
+  {
+   "key": "rx-ticket",
+   "mime": "image/webp",
+   "file": "rx-ticket.webp"
+  },
+  {
+   "key": "rx-elegant",
+   "mime": "image/webp",
+   "file": "rx-elegant.webp"
+  },
+  {
+   "key": "rx-festive",
+   "mime": "image/webp",
+   "file": "rx-festive.webp"
+  },
+  {
+   "key": "rx-classic",
+   "mime": "image/webp",
+   "file": "rx-classic.webp"
+  },
+  {
+   "key": "rx-compact",
+   "mime": "image/webp",
+   "file": "rx-compact.webp"
+  },
+  {
+   "key": "couple",
+   "mime": "image/webp",
+   "file": "couple.webp"
+  },
+  {
+   "key": "ear",
+   "mime": "image/webp",
+   "file": "ear.webp"
+  },
+  {
+   "key": "house",
+   "mime": "image/webp",
+   "file": "house.webp"
+  },
+  {
+   "key": "temple",
+   "mime": "image/webp",
+   "file": "temple.webp"
+  },
+  {
+   "key": "mandap",
+   "mime": "image/webp",
+   "file": "mandap.webp"
+  }
+ ]
+}
