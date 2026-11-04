@@ -38,12 +38,18 @@ class WebhookProvider implements MessageProvider {
       method: 'POST',
       headers: { 'content-type': 'application/json', 'x-moipoint-secret': cfg.webhookSecret },
       body: JSON.stringify(m),
+      signal: AbortSignal.timeout(15000),
     });
     if (!res.ok) throw new Error(`Webhook answered ${res.status}`);
     const body: any = await res.json().catch(() => ({}));
     return { ref: body.ref || body.id || m.id };
   }
 }
+
+/** A provider outage should not lose a receipt, so sending keeps trying for this long. OTP codes expire at the same moment. */
+const KEEP_TRYING_MS = 10 * 60 * 1000;
+/** Leaves first attempts alone, so a retry never races a send that has only just started. */
+const RETRY_AFTER_MS = 20 * 1000;
 
 /** Master Admin's cost pages read this log. */
 const PLAT_KIND: Record<string, string> = { M1: 'signup-otp', M2: 'reset-otp', M3: 'lead-otp', M4: 'moibook', M6: 'campaign' };
@@ -52,6 +58,7 @@ const PLAT_KIND: Record<string, string> = { M1: 'signup-otp', M2: 'reset-otp', M
 export class MessagesService {
   private log = new Logger('Messages');
   private provider: MessageProvider = cfg.messageProvider === 'webhook' ? new WebhookProvider() : new DevProvider();
+  private sending = new Set<string>();
 
   constructor(private prisma: PrismaService, private stream: StreamService) {}
 
@@ -89,17 +96,30 @@ export class MessagesService {
     }
   }
 
+  /** Picks up whatever a provider outage or a server restart left unsent. Runs with the other timed jobs. */
+  async retryQueued() {
+    const due = await this.prisma.message.findMany({ where: { status: 'queued', createdAt: { lt: new Date(Date.now() - RETRY_AFTER_MS) } }, orderBy: { createdAt: 'asc' }, take: 200, select: { id: true } });
+    await Promise.allSettled(due.map((m) => this.deliverOne(m.id)));
+  }
+
   private async deliverOne(id: string) {
-    const m = await this.prisma.message.findUnique({ where: { id } });
-    if (!m || m.status !== 'queued') return;
+    if (this.sending.has(id)) return;
+    this.sending.add(id);
     try {
-      const { ref } = await this.provider.send({ id: m.id, trigger: m.trigger, channel: m.channel, to: m.to, text: m.text, vars: m.vars, media: m.media });
-      await this.prisma.message.update({ where: { id }, data: { status: 'sent', sentAt: new Date(), provider: this.provider.name, providerRef: ref || null } });
-    } catch (e: any) {
-      await this.setStatus(id, 'failed', e.message);
-      return;
+      const m = await this.prisma.message.findUnique({ where: { id } });
+      if (!m || m.status !== 'queued') return;
+      try {
+        const { ref } = await this.provider.send({ id: m.id, trigger: m.trigger, channel: m.channel, to: m.to, text: m.text, vars: m.vars, media: m.media });
+        await this.prisma.message.update({ where: { id }, data: { status: 'sent', sentAt: new Date(), provider: this.provider.name, providerRef: ref || null, error: null } });
+      } catch (e: any) {
+        if (Date.now() - m.createdAt.getTime() >= KEEP_TRYING_MS) await this.setStatus(id, 'failed', e.message);
+        else await this.prisma.message.update({ where: { id }, data: { error: e.message } });
+        return;
+      }
+      if (this.provider.name === 'dev') this.simulateDelivery(id, m.channel);
+    } finally {
+      this.sending.delete(id);
     }
-    if (this.provider.name === 'dev') this.simulateDelivery(id, m.channel);
   }
 
   /** In testing, moves messages along as a real provider would, so the Messages sent screen fills in. */

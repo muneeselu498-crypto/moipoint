@@ -43,6 +43,9 @@ export const manager = async () => { const d = new Device(); await d.login('divy
 export const collector = async () => { const d = new Device(); await d.login('raj.moi@gmail.com', 'raj123'); return d; };
 export const staff = async () => { const d = new Device(); await d.login('master@moipoint.in', 'master123'); return d; };
 
+/** A date that is always ahead, so these tests keep working next year. */
+export const FUTURE = new Date(Date.now() + 120 * 86400000).toISOString().slice(0, 10);
+
 let n = 0;
 export const uniq = (p = 'x') => `${p}${Date.now().toString(36)}${(n++).toString(36)}`;
 export const mobile = () => `9${String(Date.now() + n++).slice(-9)}`;

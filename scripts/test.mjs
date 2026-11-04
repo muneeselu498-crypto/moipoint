@@ -34,9 +34,18 @@ for (let i = 0; i < 60; i++) {
   await new Promise((r) => setTimeout(r, 500));
 }
 
-// a second copy with testing tools off, exactly as a real server would run
+// a second copy with testing tools off, exactly as a real server would run, on its own database
+// and connected to the stand-in provider in tests/prod.test.mjs
 const PROD_PORT = 4611;
-const prod = spawn('node', ['dist/main.js'], { cwd: api, env: { ...env, PORT: String(PROD_PORT), DEV_TOOLS: '0', PUBLIC_URL: `http://localhost:${PROD_PORT}` }, stdio: 'ignore' });
+const PROVIDER_PORT = 4612;
+const PROD_DB = 'moipoint_test_prod';
+const prodUrl = `postgresql://moipoint@localhost:5544/${PROD_DB}`;
+psql(`DROP DATABASE IF EXISTS ${PROD_DB} WITH (FORCE)`);
+psql(`CREATE DATABASE ${PROD_DB}`);
+const prodEnv = { ...env, DATABASE_URL: prodUrl, PORT: String(PROD_PORT), DEV_TOOLS: '0', PUBLIC_URL: `http://localhost:${PROD_PORT}`, MESSAGE_PROVIDER: 'webhook', MESSAGE_WEBHOOK_URL: `http://127.0.0.1:${PROVIDER_PORT}/hook`, MESSAGE_WEBHOOK_SECRET: 'test-secret' };
+execFileSync('npx', ['prisma', 'migrate', 'deploy'], { cwd: api, env: prodEnv, stdio: 'ignore', shell: sh });
+execFileSync('npx', ['ts-node', '--transpile-only', 'prisma/seed.ts'], { cwd: api, env: prodEnv, stdio: 'ignore', shell: sh });
+const prod = spawn('node', ['dist/main.js'], { cwd: api, env: prodEnv, stdio: 'ignore' });
 process.on('exit', () => prod.kill());
 for (let i = 0; i < 60; i++) {
   const ok = await fetch(`http://localhost:${PROD_PORT}/api/state`).then((r) => r.ok).catch(() => false);
@@ -47,7 +56,7 @@ for (let i = 0; i < 60; i++) {
 const which = process.argv[2];
 const sets = { api: ['tests/api.test.mjs'], ui: ['tests/ui.test.mjs'], prod: ['tests/prod.test.mjs'] };
 const files = sets[which] ?? [...sets.api, ...sets.ui, ...sets.prod];
-const run = spawnSync('node', ['--test', '--test-concurrency=1', ...files], { cwd: root, env: { ...env, BASE: `http://localhost:${PORT}`, PROD_BASE: `http://localhost:${PROD_PORT}` }, stdio: 'inherit' });
+const run = spawnSync('node', ['--test', '--test-concurrency=1', ...files], { cwd: root, env: { ...env, BASE: `http://localhost:${PORT}`, PROD_BASE: `http://localhost:${PROD_PORT}`, PROD_DATABASE_URL: prodUrl, PROVIDER_PORT: String(PROVIDER_PORT) }, stdio: 'inherit' });
 stop();
 prod.kill();
 process.exit(run.status ?? 1);

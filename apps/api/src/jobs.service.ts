@@ -29,6 +29,7 @@ export class JobsService {
       await this.eventStatus();
       await this.reminders();
       await this.moiBooks();
+      await this.messages.retryQueued();
     } catch (e: any) {
       this.log.error(e.message);
     }

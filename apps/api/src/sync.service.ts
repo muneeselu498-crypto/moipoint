@@ -1,5 +1,6 @@
 import { HttpException, Injectable, Logger } from '@nestjs/common';
 import { MODEL, PLATFORM_ARRAYS, PUBLIC_DOCS, PUSH_ORDER, STATE_FLAGS, TENANT_DOCS, type Col } from './collections';
+import { cfg } from './config';
 import { MessagesService } from './messages.service';
 import { PrismaService, Tx } from './prisma.service';
 import { Scope, ScopeService } from './scope.service';
@@ -539,7 +540,7 @@ export class SyncService {
         if (d.logId) {
           const log = await tx.msgLog.findUnique({ where: { id: d.logId } });
           const img = (log?.data as any)?.img;
-          if (typeof img === 'string') media = { image: img };
+          if (typeof img === 'string') media = { image: img.startsWith('/') ? cfg.publicUrl + img : img };
         }
         c.messages.push(await this.messages.enqueue(tx, {
           trigger: d.trigger || 'C1', channel: d.channel, to: String(d.to), text: String(data.text || '').slice(0, 4096),
@@ -555,7 +556,9 @@ export class SyncService {
     } else if (wantsSend && d.channel === 'Email' && s.user?.email && d.to === s.user.email) {
       // calendar invites go only to the person's own address
       dispatchedAt = new Date();
-      c.messages.push(await this.messages.enqueue(tx, { trigger: 'M5', channel: 'Email', to: String(d.to), text: String(data.text || ''), media: { attach: d.attach ?? null }, paidBy: 'platform', accountId, notificationId: id }));
+      const ics = typeof d.ics === 'string' && d.ics.startsWith('BEGIN:VCALENDAR') && d.ics.length <= 8000 ? d.ics : null;
+      delete data.ics;
+      c.messages.push(await this.messages.enqueue(tx, { trigger: 'M5', channel: 'Email', to: String(d.to), text: String(data.text || ''), vars: d.vars ?? undefined, media: ics ? { document: { name: 'reminder.ics', text: ics } } : undefined, paidBy: 'platform', accountId, notificationId: id }));
     }
     const row = await this.write(tx, c, 'notifications', id, { accountId, eventId, ownerId, channel: String(d.channel || 'In app'), status, dispatchedAt }, data);
     if (accountId) c.touched.add(accountId);

@@ -1,8 +1,8 @@
 // Real browser tests. Each one is something a person actually does, on separate devices.
 import assert from 'node:assert/strict';
-import { after, before, describe, test } from 'node:test';
+import { after, before, beforeEach, describe, test } from 'node:test';
 import { chromium } from 'playwright-core';
-import { BASE, Device, mobile, uniq } from './helpers.mjs';
+import { BASE, Device, FUTURE, mobile, staff, uniq } from './helpers.mjs';
 
 let browser;
 before(async () => { browser = await chromium.launch({ channel: 'chrome', headless: true }); });
@@ -85,7 +85,7 @@ async function createEvent(d, name) {
   await d.p.locator('[data-act=evNew]').first().click();
   await d.p.waitForSelector('#n_name');
   await d.p.fill('#n_name', name);
-  await d.p.evaluate(() => { const el = document.getElementById('n_date'); el.value = '2027-03-10'; el.dispatchEvent(new Event('input', { bubbles: true })); el.dispatchEvent(new Event('change', { bubbles: true })); });
+  await d.p.evaluate((date) => { const el = document.getElementById('n_date'); el.value = date; el.dispatchEvent(new Event('input', { bubbles: true })); el.dispatchEvent(new Event('change', { bubbles: true })); }, FUTURE);
   await d.p.fill('#n_venue', 'Test Mahal');
   await d.p.fill('#n_org', 'Test Organiser');
   for (let i = 0; i < 8 && (await d.p.locator('form.ewz').count()); i++) {
@@ -492,5 +492,278 @@ describe('every screen still opens', () => {
     assert.match(text, /[஀-௿]{3,}/);
     assert.deepEqual(d.errors, []);
     await d.close();
+  });
+});
+
+describe('all 17 automation triggers, through the real screens', () => {
+  const OWNER_MOBILE = '9840012345';
+  let o;
+  let since = 0;
+  let fresh;
+  let cashGuest;
+
+  beforeEach(() => { since = Date.now() - 500; });
+  before(async () => {
+    o = await device(LAPTOP);
+    await login(o, OWNER);
+    // enough credits for everything below, whatever the earlier tests used
+    const start = await o.S('S.wallet.credits');
+    await go(o, 'credits');
+    await settle(o);
+    await o.S('buyPay(300)');
+    await settle(o, 300);
+    const box = o.p.locator('#buy_ok');
+    if (await box.count()) await box.check();
+    await o.p.locator('[data-act=buySim]').click();
+    await synced(o, `S.wallet.credits>=${start + 300}`);
+  });
+  after(async () => { await o.close(); });
+
+  /** Waits for a message sent during this test, and returns every copy of it, one per channel. */
+  async function fired(trigger, match = () => true, ms = 12000) {
+    const end = Date.now() + ms;
+    for (;;) {
+      const all = (await new Device().get('/api/dev/messages')).json.messages;
+      const hits = all.filter((m) => m.trigger === trigger && Date.parse(m.createdAt) >= since && match(m));
+      if (hits.length) return hits;
+      if (Date.now() > end) assert.fail(`${trigger} never reached the outbox`);
+      await new Promise((r) => setTimeout(r, 250));
+    }
+  }
+
+  /** A guest on their own phone: scans the QR, picks how to pay, and confirms by OTP. */
+  async function guest(mode, name, mob) {
+    const g = await device();
+    await g.p.goto(`${BASE}/#EV003`, { waitUntil: 'load' });
+    await g.p.waitForSelector('form[data-form=pub]');
+    await g.p.locator(`[data-act=mode][data-mode=${mode}]`).click();
+    await settle(g, 200);
+    await g.p.fill('#p_mobile', mob);
+    await g.p.fill('#p_name', name);
+    await g.p.fill('#p_amount', '501');
+    if (mode === 'upi') await g.p.fill('#p_utr', '123456789012');
+    await g.p.locator('form[data-form=pub] button:not([type=button])').click();
+    await g.p.waitForSelector('#qo_code');
+    const code = (await g.p.locator('form[data-form=qrOtp] b.code').textContent()).trim();
+    await g.p.fill('#qo_code', code); // six digits verify by themselves
+    if (mode === 'online') await g.p.locator('[data-act=paySim]').click();
+    await synced(g, `flows.public&&flows.public.stage==='done'`);
+    await g.close();
+  }
+
+  const entry = async (name) => {
+    await synced(o, `S.moi.some(m=>m.c.name===${JSON.stringify(name)})`);
+    return o.S(`(()=>{const m=S.moi.find(x=>x.c.name===${JSON.stringify(name)});return {id:m.id,code:m.code}})()`);
+  };
+
+  /** Presses a real button on the counter's waiting list. */
+  async function tap(act, id) {
+    await go(o, 'ev-e2-list');
+    await settle(o);
+    await o.S('render()');
+    await o.p.locator(`[data-act=${act}][data-id="${id}"]`).first().click();
+  }
+
+  const customerPaid = (hits, quote) => {
+    for (const h of hits) {
+      assert.equal(h.paidBy, 'customer');
+      if (quote) assert.ok(h.text.includes(quote), `${h.trigger} must quote ${quote}: ${h.text}`);
+    }
+  };
+
+  test('C1: a Moi saved at the counter', async () => {
+    const mob = mobile();
+    const name = uniq('Counter ');
+    await receiveMoi(o, 'e2', name, 1001, mob);
+    const { code } = await entry(name);
+    const hits = await fired('C1', (m) => m.to === mob);
+    customerPaid(hits, code);
+    assert.equal(hits[0].vars.receipt, code);
+  });
+
+  test('C8 and C5: a guest confirms by code and chooses cash', async () => {
+    const mob = mobile();
+    const name = uniq('Cash ');
+    await guest('cash', name, mob);
+    const otp = await fired('C8', (m) => m.to === mob);
+    assert.equal(otp[0].channel, 'SMS');
+    assert.match(otp[0].vars.otp, /^\d{6}$/);
+    assert.equal(otp[0].paidBy, 'customer');
+    const hits = await fired('C5', (m) => m.to === mob);
+    assert.equal(hits[0].channel, 'WhatsApp');
+    cashGuest = { name, mob, ...(await entry(name)) };
+    customerPaid(hits, cashGuest.code);
+  });
+
+  test('C3: the counter marks that cash as collected', async () => {
+    await tap('collected', cashGuest.id);
+    customerPaid(await fired('C3', (m) => m.to === cashGuest.mob), cashGuest.code);
+  });
+
+  test('C6 and C2: a guest sends UPI details, and the family verifies them', async () => {
+    const mob = mobile();
+    const name = uniq('Upi ');
+    await guest('upi', name, mob);
+    const hits = await fired('C6', (m) => m.to === mob);
+    assert.equal(hits[0].channel, 'WhatsApp');
+    const { id, code } = await entry(name);
+    customerPaid(hits, code);
+    await tap('verify', id);
+    customerPaid(await fired('C2', (m) => m.to === mob), code);
+  });
+
+  test('C4: a guest says they paid by UPI but hands over cash', async () => {
+    const mob = mobile();
+    const name = uniq('Unpaid ');
+    await guest('upi', name, mob);
+    const { id, code } = await entry(name);
+    await tap('wpCash', id);
+    customerPaid(await fired('C4', (m) => m.to === mob), code);
+  });
+
+  test('C7: a guest pays online on the QR page', async () => {
+    const mob = mobile();
+    const name = uniq('Online ');
+    await guest('online', name, mob);
+    const hits = await fired('C7', (m) => m.to === mob);
+    assert.equal(hits[0].channel, 'WhatsApp');
+    customerPaid(hits, (await entry(name)).code);
+  });
+
+  test('C9: a payout with the WhatsApp box ticked', async () => {
+    const mob = mobile();
+    await go(o, 'ev-e2-payouts');
+    await settle(o);
+    await o.p.locator('[data-act=poNew]').first().click();
+    await o.p.waitForSelector('#po_amount');
+    await o.p.fill('#po_amount', '100');
+    await o.p.fill('#po_to', 'Trigger Receiver');
+    await o.p.fill('#po_mobile', mob);
+    await o.p.check('#po_wa');
+    const send = o.p.locator('form[data-form=po] .md-f button.btn-primary');
+    await send.click();
+    await settle(o, 300);
+    if (await send.count()) await send.click(); // it asks twice when the counter holds less cash
+    const hits = await fired('C9', (m) => m.to === mob);
+    assert.equal(hits[0].channel, 'WhatsApp');
+    customerPaid(hits, 'Trigger Receiver');
+  });
+
+  test('M5 and C10: a reminder sends its calendar file, then fires on time', async () => {
+    const title = uniq('Reminder ');
+    await go(o, 'reminders');
+    await settle(o);
+    await o.p.locator('[data-act=remNew]').first().click();
+    await o.p.waitForSelector('#rm_title');
+    await o.p.fill('#rm_title', title);
+    await o.p.fill('#rm_person', 'Trigger Person');
+    await o.p.fill('#rm_date', new Date().toISOString().slice(0, 10));
+    await o.p.selectOption('#rm_before', '0');
+    await o.p.evaluate(() => { document.getElementById('rm_at').value = '00:00'; });
+    await o.p.check('#rm_wa');
+    await o.p.locator('form[data-form=rem] .md-f button.btn-primary').click();
+
+    const [cal] = await fired('M5', (m) => m.text.includes(title));
+    assert.equal(cal.to, OWNER[0]);
+    assert.equal(cal.channel, 'Email');
+    assert.equal(cal.paidBy, 'platform');
+    assert.equal(cal.media.document.name, 'reminder.ics');
+    assert.ok(cal.media.document.text.startsWith('BEGIN:VCALENDAR'), 'the invite must carry the calendar file itself');
+    assert.ok(cal.media.document.text.includes(`SUMMARY:${title}`));
+
+    await new Device().post('/api/dev/run-jobs');
+    const hits = await fired('C10', (m) => m.text.includes(title));
+    assert.equal(hits[0].to, OWNER_MOBILE);
+    customerPaid(hits);
+  });
+
+  test('C11: an owner sends an invitation', async () => {
+    await o.S(`msgOpen({aud:'ev',ev:'e1',kind:'invite'})`);
+    await o.p.waitForSelector('form[data-form=invite]');
+    await settle(o, 300);
+    await o.S(`inv.img='data:image/png;base64,'+'iVBORw0KGgo'.repeat(200)`);
+    await o.p.locator('form[data-form=invite] .md-f button.btn-primary').last().click();
+    const hits = await fired('C11');
+    customerPaid(hits);
+    assert.ok(hits[0].logId, 'it must link back to the Messages sent screen');
+    assert.equal((await fetch(hits[0].media.image)).status, 200, 'a provider must be able to fetch the photo');
+    await o.S('closeModal()');
+  });
+
+  test('M4: the Moi Book PDF is sent, and the link opens a real PDF', async () => {
+    await go(o, 'ev-e1-overview');
+    await settle(o, 600);
+    await o.p.locator('[data-act=bookAgain][data-id=e1]').first().click();
+    const hits = await fired('M4', () => true, 40000);
+    const wa = hits.find((m) => m.channel === 'WhatsApp');
+    assert.equal(wa.paidBy, 'platform');
+    const pdf = await fetch(wa.media.document.url);
+    assert.equal(pdf.status, 200);
+    assert.equal(Buffer.from(await pdf.arrayBuffer()).subarray(0, 4).toString(), '%PDF');
+  });
+
+  test('M1: a new user asks for a sign-up code', async () => {
+    const d = await device();
+    fresh = await signup(d, 'Trigger Family');
+    const [m] = await fired('M1', (x) => x.to === fresh.mob);
+    assert.equal(m.channel, 'SMS');
+    assert.equal(m.paidBy, 'platform');
+    assert.match(m.vars.otp, /^\d{6}$/);
+    await d.close();
+  });
+
+  test('M2: a user asks for a password reset code', async () => {
+    const d = await device();
+    await d.p.goto(`${BASE}/#forgot`, { waitUntil: 'load' });
+    await d.p.waitForSelector('#fp_email');
+    await d.p.fill('#fp_email', fresh.email);
+    await d.p.click('form[data-form=fpFind] button');
+    await d.p.waitForSelector('#fp_mob');
+    await d.p.fill('#fp_mob', fresh.mob);
+    await d.p.click('form[data-form=fpMob] button');
+    await d.p.waitForSelector('#fp_code');
+    const [m] = await fired('M2', (x) => x.to === fresh.mob);
+    assert.equal(m.channel, 'SMS');
+    assert.equal(m.paidBy, 'platform');
+    await d.close();
+  });
+
+  test('M3: a website visitor sends an enquiry', async () => {
+    const mob = mobile();
+    const name = uniq('Lead ');
+    const d = await device();
+    await d.p.goto(`${BASE}/`, { waitUntil: 'load' });
+    await settle(d, 600);
+    await d.S(`lLeadModal('enquiry')`);
+    await d.p.waitForSelector('#ll_name');
+    await d.p.fill('#ll_name', name);
+    await d.p.fill('#ll_mobile', mob);
+    await d.p.fill('#ll_msg', 'Trigger question');
+    await d.p.locator('form[data-form=lLead] .md-f button.btn-primary').click();
+    await d.p.waitForSelector('#lo_code');
+    const [m] = await fired('M3', (x) => x.to === mob);
+    assert.equal(m.paidBy, 'platform');
+    await d.p.fill('#lo_code', m.vars.otp);
+    await d.p.waitForSelector('#lo_code', { state: 'detached' });
+    await settle(d, 500);
+    assert.ok((await staff()).state.state.platform.leads.some((l) => l.name === name), 'the enquiry must reach Master Admin');
+    await d.close();
+  });
+
+  test('M6: Master Admin sends a WhatsApp campaign to organisers', async () => {
+    const s = await device(LAPTOP);
+    await login(s, ['master@moipoint.in', 'master123']);
+    await go(s, 'admin-campaigns');
+    await settle(s);
+    await s.p.selectOption('#cf_ch', 'wa');
+    await settle(s, 300);
+    const text = uniq('Campaign ');
+    await s.p.fill('#cf_msg', text);
+    await s.p.locator('#cmpForm button.btn-primary').click();
+    const hits = await fired('M6', (m) => m.text === text);
+    assert.equal(hits[0].channel, 'WhatsApp');
+    assert.equal(hits[0].paidBy, 'platform');
+    assert.ok(hits.some((m) => m.to === OWNER_MOBILE));
+    await s.close();
   });
 });

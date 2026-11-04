@@ -85,6 +85,8 @@ export class BookService {
     const file = `MoiBook-${String(ev.no).replace(/\W/g, '')}.pdf`;
     const text = `Your Moi Book for ${d.name} is ready: ${n} entries, total ${fmt(total)}. PDF attached.`;
     const document = (await this.pdf(ev)) ?? { name: file, url: null };
+    // the provider fetches the file itself, so it needs the full address
+    const media = { document: { name: document.name, url: document.url ? cfg.publicUrl + document.url : null } };
     const now = Date.now();
 
     const out = await this.prisma.$transaction(async (tx) => {
@@ -99,12 +101,12 @@ export class BookService {
       };
       if (to) {
         const nid = await note('WhatsApp', to, text, null);
-        ids.push(await this.messages.enqueue(tx, { trigger: 'M4', channel: 'WhatsApp', to, text, vars: { event: d.name, entries: n, total: fmt(total) }, media: { document }, paidBy: 'platform', accountId: ev.accountId, eventId: ev.id, notificationId: nid }));
+        ids.push(await this.messages.enqueue(tx, { trigger: 'M4', channel: 'WhatsApp', to, text, vars: { event: d.name, entries: n, total: fmt(total) }, media, paidBy: 'platform', accountId: ev.accountId, eventId: ev.id, notificationId: nid }));
       }
       await note('In app', 'You', `Moi Book PDF for ${d.name} sent to WhatsApp +91 ${to.slice(0, 5)} ${to.slice(5)}.`, account?.ownerId ?? null);
       if (email) {
         const nid = await note('Email', email, `Your Moi Book for ${d.name}: ${n} entries, total ${fmt(total)}. PDF attached.`, null);
-        ids.push(await this.messages.enqueue(tx, { trigger: 'M4', channel: 'Email', to: email, text: `Subject: Your Moi Book · ${d.name} · ${n} entries · ${fmt(total)}\n\n${text}`, media: { document }, paidBy: 'platform', accountId: ev.accountId, eventId: ev.id, notificationId: nid }));
+        ids.push(await this.messages.enqueue(tx, { trigger: 'M4', channel: 'Email', to: email, text: `Subject: Your Moi Book · ${d.name} · ${n} entries · ${fmt(total)}\n\n${text}`, media, paidBy: 'platform', accountId: ev.accountId, eventId: ev.id, notificationId: nid }));
       }
       await this.messages.logPlatformCost(tx, 'M4', 1, ev.no);
       const fresh = await tx.event.findUnique({ where: { id: ev.id } });

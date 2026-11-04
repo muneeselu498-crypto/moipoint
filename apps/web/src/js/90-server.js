@@ -242,6 +242,7 @@ const mpMoiVars=(ev,m)=>{const lg=evLang(ev);return {guest:nm(m,lg),amount:amtTx
 const mpTrig=(act,t)=>{const f=ACT[act];ACT[act]=(...a)=>{MP_TRIG=t;try{return f(...a)}finally{MP_TRIG=null}}};
 mpTrig('collected','C3');mpTrig('wpCash','C4');
 {const _po=FORMS.po;FORMS.po=f=>mpWith({trigger:'C9'},()=>_po(f))}
+{const _rc=remCalInvite;remCalInvite=function(r){const n0=S.notifications.length;_rc(r);if(S.notifications.length>n0)Object.assign(S.notifications[S.notifications.length-1],{trigger:'M5',ics:remIcs(r),vars:{title:r.title,date:dfmt(r.date),time:r.time?tfmt(r.time):''}})}}
 {const _iv=FORMS.invite;FORMS.invite=f=>{const img=inv.img,n0=S.notifications.length;
   const r=mpWith({trigger:'C11',kind:inv.kind},()=>_iv(f));
   const L=S.msgLog[0];if(L&&S.notifications.length>n0){if(img)L.img=img;S.notifications.slice(n0).forEach(n=>{n.logId=L.id});save()}return r}}

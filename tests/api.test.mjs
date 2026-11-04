@@ -1,7 +1,7 @@
 // Server rules. Each test here is something a real person might try, on purpose or by accident.
 import assert from 'node:assert/strict';
 import { describe, test } from 'node:test';
-import { BASE, collector, Device, manager, mobile, moiRecord, newCustomer, owner, staff, uniq } from './helpers.mjs';
+import { BASE, collector, Device, manager, mobile, moiRecord, newCustomer, owner, staff, uniq, FUTURE } from './helpers.mjs';
 
 const credits = async (d) => {
   const r = await d.get('/api/state');
@@ -99,7 +99,7 @@ describe('who can change what', () => {
 
   test('one customer cannot create an event inside another account', async () => {
     const a = await newCustomer();
-    const r = await a.pushOne('events', uniq('e'), { name: 'Sneaky', acc: 'A1001', date: '2026-12-01', status: 'active' });
+    const r = await a.pushOne('events', uniq('e'), { name: 'Sneaky', acc: 'A1001', date: FUTURE, status: 'active' });
     assert.equal(r.ok, false);
   });
 
@@ -281,7 +281,7 @@ describe('credits and messages', () => {
   };
   const event = async (d) => {
     const id = uniq('e');
-    const r = await d.pushOne('events', id, { id, acc: d.accountId, name: 'Fn', date: '2027-01-01', status: 'active', token: uniq('t') });
+    const r = await d.pushOne('events', id, { id, acc: d.accountId, name: 'Fn', date: FUTURE, status: 'active', token: uniq('t') });
     return r.data;
   };
 
@@ -292,7 +292,7 @@ describe('credits and messages', () => {
   test('a new event adds 20 free credits, once', async () => {
     const a = await newCustomer();
     const id = uniq('e');
-    const ev = { id, acc: a.accountId, name: 'Fn', date: '2027-01-01', status: 'active', token: uniq('t'), freeCr: 20 };
+    const ev = { id, acc: a.accountId, name: 'Fn', date: FUTURE, status: 'active', token: uniq('t'), freeCr: 20 };
     const made = await a.pushOne('events', id, ev);
     assert.equal(await credits(a), 40);
     await a.pushOne('events', id, { ...made.data, desc: 'edited' });
@@ -518,7 +518,7 @@ describe('guest QR page', () => {
   test('a switched-off payment mode is refused', async () => {
     const a = await newCustomer();
     const id = uniq('e');
-    await a.pushOne('events', id, { id, acc: a.accountId, name: 'Fn', date: '2027-01-01', status: 'active', token: uniq('t'), lang: 'en', qrModes: { cash: 1, upi: 0, online: 0 } });
+    await a.pushOne('events', id, { id, acc: a.accountId, name: 'Fn', date: FUTURE, status: 'active', token: uniq('t'), lang: 'en', qrModes: { cash: 1, upi: 0, online: 0 } });
     const g = await guest(id);
     const r = await g.d.post('/api/public/moi', { ...entry(g), eventId: id, mode: 'upi', utr: '123456789012' });
     assert.equal(r.status, 400);
@@ -527,7 +527,7 @@ describe('guest QR page', () => {
   test('a void event takes no entries', async () => {
     const a = await newCustomer();
     const id = uniq('e');
-    await a.pushOne('events', id, { id, acc: a.accountId, name: 'Fn', date: '2027-01-01', status: 'void', token: uniq('t') });
+    await a.pushOne('events', id, { id, acc: a.accountId, name: 'Fn', date: FUTURE, status: 'void', token: uniq('t') });
     const g = await guest(id);
     assert.equal((await g.d.post('/api/public/moi', { ...entry(g), eventId: id })).status, 400);
   });
@@ -535,7 +535,7 @@ describe('guest QR page', () => {
   test('with no credits the guest is sent to the counter', async () => {
     const a = await newCustomer();
     const id = uniq('e');
-    const ev = await a.pushOne('events', id, { id, acc: a.accountId, name: 'Fn', date: '2027-01-01', status: 'active', token: uniq('t') });
+    const ev = await a.pushOne('events', id, { id, acc: a.accountId, name: 'Fn', date: FUTURE, status: 'active', token: uniq('t') });
     for (let i = 0; i < 20; i++) { const n = uniq('n'); await a.pushOne('notifications', n, { id: n, eid: ev.data.id, channel: 'SMS', to: '9876512345', text: 'x', status: 'Sent', at: Date.now() }); }
     const r = await new Device().post('/api/public/otp/send', { eventId: id, mobile: mobile() });
     assert.equal(r.status, 402);
@@ -619,7 +619,7 @@ describe('work that runs on time', () => {
     const books = (await outbox()).filter((x) => x.trigger === 'M4' && x.text.includes(ev.data.name));
     assert.equal(books.filter((b) => b.channel === 'WhatsApp').length, 1);
     assert.equal(books[0].paidBy, 'platform');
-    const pdf = await fetch(BASE + books[0].media.document.url);
+    const pdf = await fetch(books[0].media.document.url);
     assert.equal(pdf.status, 200);
     const bytes = Buffer.from(await pdf.arrayBuffer());
     assert.equal(bytes.subarray(0, 4).toString(), '%PDF', 'must be a real PDF');

@@ -72,9 +72,19 @@ Delivery reports and replies come back to `POST /api/webhooks/messages`, with th
 { "from": "9876512345", "text": "STOP" }
 ```
 
-Status can be `delivered`, `read` or `failed`. A direct WhatsApp or SMS provider can also be added as another class in `messages.service.ts`.
+Status can be `delivered`, `read` or `failed`. Photos arrive in `media.image` and the Moi Book PDF in `media.document.url`, as full web addresses. The calendar invite (M5) carries its file as text in `media.document.text`.
+
+If the webhook is down or takes over 15 seconds to answer, the server tries again every 30 seconds for 10 minutes, then marks the message failed. A retry keeps the same `id`, so use it to ignore repeats. A direct WhatsApp or SMS provider can also be added as another class in `messages.service.ts`.
 
 **Before a real launch**, set `DEV_TOOLS=0` and `SEED_DEMO=0`. That turns off the Dev Outbox, stops OTP codes appearing on screen, and hides the demo logins and online payment. Use https, and set `PUBLIC_URL` to the https address so cookies are secure.
+
+The Moi Book PDF needs Chrome or Edge on the server. Set `CHROME_PATH` if it isn't in the usual place.
+
+A real install starts with no logins. Add the first Master Admin with the command below. It prints a one-time password, so change it after logging in.
+
+```
+npm run admin:create -- "Full Name" name@example.com 9876543210
+```
 
 ## How it works
 
@@ -99,7 +109,7 @@ The server treats every browser as untrusted. It decides who sees what (`whereFo
 npm test             everything
 npm run test:api     server rules only
 npm run test:ui      real browser tests only
-npm run test:prod    the app with testing tools off, as on a real server
+npm run test:prod    testing tools off and a stand-in provider, as on a real server
 ```
 
 They run on a throwaway database, so your data is safe. The browser tests use the Chrome installed on this computer.
@@ -109,4 +119,5 @@ They run on a throwaway database, so your data is safe. The browser tests use th
 - Receipt numbers are sequential, so someone could walk through the public receipt check pages. Mobile numbers are masked there, but names and amounts show. A random link in the QR would close this.
 - A device receives its whole account history at login. This is fine for family accounts, but Master Admin will need paging once there are many customers.
 - Two people editing the same record at the same moment: the last save wins. Receipt numbers and credits are protected from this.
-- Live updates assume one server process. Running several needs a shared message channel.
+- Live updates and message retries assume one server process. Running several needs a shared message channel.
+- A message that fails after every retry keeps its credit. Refunding it is an open decision in the automation report.

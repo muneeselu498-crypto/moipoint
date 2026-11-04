@@ -14,12 +14,29 @@ try {
 const prisma = new PrismaClient();
 const demo = process.env.SEED_DEMO === '1';
 
-/** Demo logins only. A real install creates its own staff through DEV_ADMIN_* below. */
+/** Demo logins only. A real install adds its first staff login with npm run admin:create. */
 const DEMO_PASSWORDS: Record<string, string> = {
   u1: 'admin123', u2: 'raj123', u3: 'divya123', u4: 'suresh123',
   p1: 'master123', p2: 'finance123', p3: 'support123', p4: 'marketing123',
 };
 const SKIP_DOCS = new Set(['tickets', 'leads', 'stockAlerts', 'resets', 'over']);
+
+const DAY = 86400000;
+/** The day the demo data was exported from the app. */
+const EXPORTED = Date.UTC(2026, 10, 4);
+
+/** Moves every date by the same gap, so the demo's upcoming function is still upcoming whenever someone first runs this. */
+function moved(v: any, days: number): any {
+  if (typeof v === 'number') return v > 1.6e12 && v < 2.1e12 ? v + days * DAY : v;
+  if (typeof v === 'string') {
+    if (/^d{4}-d{2}-d{2}$/.test(v)) return new Date(Date.parse(v) + days * DAY).toISOString().slice(0, 10);
+    if (/^d{4}-d{2}-d{2}T/.test(v)) return new Date(Date.parse(v) + days * DAY).toISOString();
+    return v;
+  }
+  if (Array.isArray(v)) return v.map((x) => moved(x, days));
+  if (v && typeof v === 'object') return Object.fromEntries(Object.entries(v).map(([k, x]) => [k, moved(x, days)]));
+  return v;
+}
 
 async function main() {
   await prisma.syncCounter.upsert({ where: { id: 1 }, create: { id: 1, rev: 1 }, update: {} });
@@ -27,7 +44,7 @@ async function main() {
     console.log('Database already has data. Nothing to do.');
     return;
   }
-  const S = JSON.parse(fs.readFileSync(path.join(__dirname, 'seed/demo-state.json'), 'utf8'));
+  const S = moved(JSON.parse(fs.readFileSync(path.join(__dirname, 'seed/demo-state.json'), 'utf8')), Math.round((Date.now() - EXPORTED) / DAY));
   const rev = 1n;
 
   for (const [key, value] of Object.entries(S.platform)) {
@@ -39,7 +56,7 @@ async function main() {
 
   if (!demo) {
     await prisma.platformDoc.create({ data: { key: '_counters', data: { evSeq: 0 } } });
-    console.log('Loaded settings only. Add the first Master Admin login before use.');
+    console.log('Loaded settings only. Add the first Master Admin login with npm run admin:create.');
     return;
   }
 
