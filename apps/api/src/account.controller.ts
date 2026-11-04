@@ -1,4 +1,4 @@
-import { Body, Controller, HttpCode, Param, Post, Req, Res } from '@nestjs/common';
+import { Body, Controller, Get, HttpCode, Param, Post, Query, Req, Res } from '@nestjs/common';
 import type { Response } from 'express';
 import { z } from 'zod';
 import { BookService } from './book.service';
@@ -102,6 +102,16 @@ export class AccountController {
     this.stream.publish([accId], Number(out));
     const a = await this.prisma.account.findUnique({ where: { id: accId } });
     return { rev: Number(out), account: this.sync.toClient('accounts', a, s) };
+  }
+
+  /** Only the server's own PDF browser holds one of these passes, and each works once. */
+  @Get('render/state')
+  async renderState(@Query('token') token: string) {
+    const eventId = this.books.takePass(token || '');
+    const ev = eventId ? await this.prisma.event.findUnique({ where: { id: eventId } }) : null;
+    if (!ev) return fail('Not found', 404);
+    const scope = { kind: 'tenant' as const, userId: null, user: null, ownerOf: [ev.accountId], accountIds: [ev.accountId], eventIds: [ev.id], helperOn: {}, key: 'render' };
+    return { me: null, ...(await this.sync.buildState(scope)) };
   }
 
   /** "Send again" on the Moi Book card. */

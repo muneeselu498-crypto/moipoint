@@ -86,15 +86,15 @@ export class SyncService {
       case 'users': {
         const links = await this.prisma.eventUser.findMany({ where: { eventId: ev, deleted: false }, select: { userId: true } });
         const owners = await this.prisma.account.findMany({ where: { id: acc }, select: { ownerId: true } });
-        const ids = [...links.map((l) => l.userId), ...owners.map((o) => o.ownerId).filter(Boolean), s.userId] as string[];
+        const ids = [...links.map((l) => l.userId), ...owners.map((o) => o.ownerId), s.userId].filter(Boolean) as string[];
         return { OR: [{ id: { in: ids } }, { accountId: { in: s.ownerOf } }] };
       }
       case 'accounts': return { id: acc };
       case 'events': return { id: ev };
       case 'eventUsers': case 'moi': case 'expenses': case 'payouts': return { eventId: ev };
       case 'guests': case 'ggroups': return { accountId: acc };
-      case 'reminders': return { ownerId: s.userId };
-      case 'notifications': return { OR: [{ eventId: ev }, { ownerId: s.userId }] };
+      case 'reminders': return s.userId ? { ownerId: s.userId } : null;
+      case 'notifications': return { OR: [{ eventId: ev }, ...(s.userId ? [{ ownerId: s.userId }] : [])] };
       case 'msgLog': {
         const managed = Object.entries(s.helperOn).filter(([, h]) => h.role === 'manager').map(([id]) => id);
         return { OR: [{ accountId: { in: s.ownerOf } }, { eventId: { in: managed } }] };

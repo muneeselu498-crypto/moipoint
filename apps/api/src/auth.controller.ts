@@ -113,14 +113,6 @@ export class AuthController {
     return { ticket: await this.otp.check('signup', normMob(b.mobile), '', b.code) };
   }
 
-  @Post('auth/email-check')
-  @HttpCode(200)
-  async emailCheck(@Body() body: unknown) {
-    const { email } = parse(z.object({ email: z.string().max(200) }), body);
-    const u = await this.prisma.user.findFirst({ where: { email: email.trim().toLowerCase(), deleted: false, status: { not: 'deleted' } } });
-    return { used: !!u && this.nonHelper(u) };
-  }
-
   @UseGuards(ThrottlerGuard)
   @Throttle({ default: { limit: LIMIT, ttl: 60000 } })
   @Post('auth/signup')
@@ -307,6 +299,7 @@ export class AuthController {
     const p = await this.prisma.person.findUnique({ where: { mobile: normMob(mobile) } });
     if (!p || p.deleted) return { person: null };
     const d: any = p.data;
-    return { person: { mobile: p.mobile, name: d.name, place: d.place, des: d.des, rel: d.rel, address: d.address, alt: d.alt, at: d.at, first: d.first, srcs: [], accs: [] } };
+    // name and place only: another family's notes about this guest stay with that family
+    return { person: { mobile: p.mobile, name: d.name, place: d.place, alt: d.alt, at: d.at, first: d.first, srcs: [], accs: [] } };
   }
 }

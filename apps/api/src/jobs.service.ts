@@ -14,22 +14,23 @@ import { spendCredit } from './wallet';
 @Injectable()
 export class JobsService {
   private log = new Logger('Jobs');
-  private running = false;
+  private current: Promise<void> | null = null;
 
   constructor(private prisma: PrismaService, private messages: MessagesService, private books: BookService, private stream: StreamService) {}
 
   @Interval(30000)
-  async tick() {
-    if (this.running) return;
-    this.running = true;
+  tick() {
+    this.current ??= this.work().finally(() => { this.current = null; });
+    return this.current;
+  }
+
+  private async work() {
     try {
       await this.eventStatus();
       await this.reminders();
       await this.moiBooks();
     } catch (e: any) {
       this.log.error(e.message);
-    } finally {
-      this.running = false;
     }
   }
 

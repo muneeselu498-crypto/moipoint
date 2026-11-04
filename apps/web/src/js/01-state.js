@@ -163,7 +163,7 @@ function walletFor(eid,owner){const e=eid&&S.events.find(x=>x.id===eid);if(e)ret
 /* plan of an account and its rules */
 const planOf=a=>P().plans[(a&&a.plan)||'free']||P().plans.free;
 const planOfEv=ev=>planOf(accOfEv(ev)||curAcc());
-const feat=(k,ev)=>!!planOf(ev?accOfEv(ev):curAcc()).feat[k];
+const feat=(k,ev)=>!(k==='online'&&window.MP_NO_ONLINE)&&!!planOf(ev?accOfEv(ev):curAcc()).feat[k];
 const monthKey=(d)=>(d||today()).slice(0,7);
 function grantMonthly(a){if(!a)return;const p=planOf(a),k=monthKey();if(!p.credits||a.grants[k])return;a.grants[k]=p.credits;addCredits(a,p.credits,0,`${p.name} plan · monthly credits`,'PLAN-'+k);
   S.notifications.push({id:uid('n'),owner:a.owner,channel:'In app',to:'You',text:`${p.name} plan: ${p.credits} free message credits added for this month.`,status:'Sent',at:Date.now()})}

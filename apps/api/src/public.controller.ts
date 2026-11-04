@@ -11,6 +11,7 @@ import { fail, fmt, maskMob, mobOk, normMob, nowT, today, uid } from './util';
 import { spendCredit } from './wallet';
 
 const LIMIT = cfg.devTools ? 500 : 30;
+const GUEST_CODES_PER_HOUR = 300;
 const parse = <T>(schema: z.ZodType<T>, body: unknown): T => {
   const r = schema.safeParse(body);
   return r.success ? r.data : fail('Please check the details and try again.');
@@ -85,6 +86,9 @@ export class PublicController {
     if (!mobOk(m)) fail('Enter a valid 10-digit mobile number (starts with 6, 7, 8 or 9)');
     const ev = await this.prisma.event.findUnique({ where: { id: b.eventId } });
     if (!ev || ev.deleted) return fail('This event link isn’t active');
+    // a public page could be used to burn a family's credits, so each function has an hourly ceiling
+    const recent = await this.prisma.otpCode.count({ where: { purpose: 'guest', scope: ev.id, createdAt: { gte: new Date(Date.now() - 3600e3) } } });
+    if (recent >= GUEST_CODES_PER_HOUR) fail('Too many codes right now. Please give your Moi at the counter.', 429);
     const code = await this.otp.issue('guest', m, ev.id);
     const text = `${code} is your Moi Point code for ${(ev.data as any).name}. Don’t share it. It expires in 10 minutes.`;
     const id = await this.prisma.$transaction(async (tx) => this.chargeAndQueue(tx, ev, { trigger: 'C8', channel: 'SMS', to: m, text, vars: { otp: code, event: (ev.data as any).name }, shownText: `Verification code sent to +91 ${maskMob(m)}` }));

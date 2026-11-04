@@ -46,7 +46,7 @@ function mpCollect(){const upserts=[],deletes=[],seen=new Set(),sent=new Map(),p
 
 /* updates a record where it stands, so screens holding a reference to it stay correct */
 function mpPut(col,id,data){const list=mpList(col);const cur=list.find(x=>x&&x.id===id);
-  if(cur){Object.keys(cur).forEach(k=>{if(k!=='wallet'||data.wallet)delete cur[k]});Object.assign(cur,data)}else list.push(data);
+  if(cur){Object.keys(cur).forEach(k=>{if(k!=='wallet'||data.wallet)delete cur[k]});Object.assign(cur,data)}else if(col==='msgLog')list.unshift(data);else list.push(data);
   const row=cur||data;MPS.base.set(col+'/'+id,hash(mpSer(col,row)));return row}
 function mpDrop(col,id){const list=mpList(col),i=list.findIndex(x=>x&&x.id===id);if(i>=0)list.splice(i,1);MPS.base.delete(col+'/'+id)}
 
@@ -114,6 +114,8 @@ document.addEventListener('visibilitychange',()=>{if(!document.hidden&&me){mpPul
 
 function mpApplyState(r){
   const st=r.state;MPS.rev=r.rev;MPS.scope=r.scope;if(r.cfg)MPS.cfg=r.cfg;
+  /* with no gateway connected, online payment is not offered at all */
+  window.MP_NO_ONLINE=!(MPS.cfg.payments==='simulate'&&MPS.cfg.devTools);mpDevLink();
   if(!st.accounts||!st.accounts.length)st.accounts=[mpStubAccount()];
   S=st;initState();S.queue=S.queue||[];
   me=r.me?S.users.find(u=>u.id===r.me)||null:null;
@@ -123,6 +125,7 @@ async function mpReloadState(){try{const r=await mpApi('/api/state');const id=me
 function mpSessionLost(){if(!me)return;const id=me.id;me=null;if(MPS.es){MPS.es.close();MPS.es=null}try{localStorage.setItem('mp-lastuser',id);localStorage.removeItem(SK);sessionStorage.removeItem(SK)}catch(_){}toast('Please log in again. Your entries are safe on this device.','bad');go('login')}
 
 async function mpBoot(){
+  const pass=new URLSearchParams(location.search).get('render');if(pass)return mpRenderBook(pass);
   let sid=null;try{sid=localStorage.getItem(SK)||sessionStorage.getItem(SK)}catch(_){}
   const saved=!!(sid&&me);
   /* a returning person sees their saved copy at once, however slow the venue's network is */
@@ -139,12 +142,27 @@ async function mpBoot(){
   MPS.ready=true;
   if(fresh&&saved&&me)mpRefresh();else render()}
 
+/* the server's PDF browser opens this page to print one function's Moi Book */
+async function mpRenderBook(pass){try{localStorage.clear()}catch(_){}
+  const r=await mpApi('/api/render/state?token='+encodeURIComponent(pass));mpApplyState({...r,me:null});
+  const ev=S.events[0];curEv=ev;const o={...book,lg:evLang(ev),style:ev.bookStyle||book.style};
+  document.body.innerHTML='<div id="printArea">'+bookHtml(ev,o)+'</div>';
+  try{await document.fonts.ready}catch(_){}
+  window.__bookOrient=o.orient;window.__bookReady=true}
+
 {const _s=save;save=function(){_s();if(MPS.ready&&me)mpSoon()}}
 
 /* ---------- the server now runs these on time, so the browser copies stand down ---------- */
 processDue=function(){};
 autoBooks=function(){};
 evAuto=function(){return 0};
+
+/* ---------- testing tools ---------- */
+function mpDevLink(){let a=document.getElementById('mpDev');if(!MPS.cfg.devTools){if(a)a.remove();return}if(a)return;
+  a=document.createElement('a');a.id='mpDev';a.href='/dev/outbox';a.target='_blank';a.rel='noopener';a.textContent='Dev Outbox';a.setAttribute('data-noi18n','');
+  a.style.cssText='position:fixed;left:10px;bottom:10px;z-index:9999;padding:5px 10px;border-radius:999px;background:#15133B;color:#fff;font:600 12px system-ui,sans-serif;text-decoration:none;opacity:.8';document.body.appendChild(a)}
+/* demo logins are for testing only */
+{const _vl=vLogin;vLogin=function(){const h=_vl();return MPS.cfg.devTools?h:h.replace(/<div><p class="small muted" style="margin-bottom:8px">Demo accounts[\s\S]*?<\/button><\/div><\/div>/,'')}}
 
 /* ---------- logging in ---------- */
 function mpFormError(f,field,e){if(field&&f.querySelector('#'+field))needAll(f,[[field,false,e.message]]);else toast(e.message,'bad')}

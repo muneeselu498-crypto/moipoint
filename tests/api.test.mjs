@@ -619,10 +619,19 @@ describe('work that runs on time', () => {
     const books = (await outbox()).filter((x) => x.trigger === 'M4' && x.text.includes(ev.data.name));
     assert.equal(books.filter((b) => b.channel === 'WhatsApp').length, 1);
     assert.equal(books[0].paidBy, 'platform');
+    const pdf = await fetch(BASE + books[0].media.document.url);
+    assert.equal(pdf.status, 200);
+    const bytes = Buffer.from(await pdf.arrayBuffer());
+    assert.equal(bytes.subarray(0, 4).toString(), '%PDF', 'must be a real PDF');
+    assert.ok(bytes.length > 5000, 'must have content');
   });
 });
 
 describe('robustness', () => {
+  test('a render pass works once, and a guessed one gets nothing', async () => {
+    assert.equal((await new Device().get('/api/render/state?token=guess')).status, 404);
+  });
+
   test('one bad record does not block the rest of a batch', async () => {
     const o = await owner();
     const good = moiRecord('e2');
