@@ -25,5 +25,6 @@
  "23-v61-receipts.js",
  "24-v62-invitations.js",
  "25-v63-v69.js",
+ "90-server.js",
  "99-boot.js"
 ]

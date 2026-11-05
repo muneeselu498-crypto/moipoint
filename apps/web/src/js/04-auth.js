@@ -42,7 +42,7 @@ function otpBox(){const left=Math.max(0,Math.ceil((AUTH.sent+30000-Date.now())/1
   return `<form class="stack" style="gap:16px" data-form="otpVerify" novalidate>
     <div class="otp-head"><span class="otp-ring">${ic('shield',30)}</span><h2>Verify your mobile</h2><p class="muted">Enter the 6-digit code sent by SMS to <b>+91 ${esc(AUTH.mobile.slice(0,5)+' '+AUTH.mobile.slice(5))}</b></p></div>
     <hr class="auth-hr">
-    <div class="note info" style="padding:10px 12px">${ic('msg',18)}<div><b>Demo code: ${AUTH.code}</b><p>In the live app this arrives by SMS.</p></div></div>
+    ${AUTH.code?`<div class="note info" style="padding:10px 12px">${ic('msg',18)}<div><b>Demo code: ${AUTH.code}</b><p>In the live app this arrives by SMS.</p></div></div>`:''}
     <label class="field" for="otp_code"><span>One-time code <i>*</i></span><input id="otp_code" class="otp-in otp-big" inputmode="numeric" maxlength="6" autocomplete="one-time-code" placeholder="••••••"></label>
     <button class="btn btn-primary btn-block" style="min-height:52px">Verify and continue ${ic('arrow',18)}</button>
     <hr class="auth-hr"><div class="row-between small" style="flex-wrap:wrap;gap:8px"><button type="button" class="link" data-act="otpBack">${ic('back',14)} Change number</button><button type="button" class="link" data-act="otpResend" ${left?'disabled':''} id="otpRe">${left?`Resend in ${left}s`:'Resend code'}</button></div>
@@ -87,7 +87,7 @@ function fpOtpSend(){if(fp.sends>=3){toast('Too many codes. Please try again aft
 function fpOtpBox(){const left=Math.max(0,Math.ceil((fp.next-Date.now())/1000));
   return `<form class="stack" style="gap:14px" data-form="fpOtp" novalidate>
     <div class="note good">${ic('check',20)}<div><b>Verification code sent to your mobile number</b><p><span data-noi18n>+91 ${esc(maskMob(fp.mob))}</span> · <span>It works for 10 minutes.</span></p></div></div>
-    <div class="note info" style="padding:10px 12px">${ic('msg',18)}<div><b>Demo code: ${fp.code}</b><p>In the live app this arrives by SMS.</p></div></div>
+    ${fp.code?`<div class="note info" style="padding:10px 12px">${ic('msg',18)}<div><b>Demo code: ${fp.code}</b><p>In the live app this arrives by SMS.</p></div></div>`:''}
     <label class="field" for="fp_code"><span>Verification code <i>*</i></span><input id="fp_code" class="otp-in otp-big" inputmode="numeric" maxlength="6" autocomplete="one-time-code" placeholder="••••••"></label>
     <button class="btn btn-primary btn-block" style="min-height:52px">Verify and continue ${ic('arrow',18)}</button>
     <div class="row-between small" style="flex-wrap:wrap;gap:8px"><button type="button" class="link" data-act="fpMobBack">${ic('back',14)} Change number</button><button type="button" class="link" data-act="fpResend" ${left?'disabled':''} id="fpRe">${left?`Resend in ${left}s`:'Resend code'}</button></div></form>`}

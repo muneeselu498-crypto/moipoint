@@ -21,7 +21,7 @@ const MODEN={cash:'Cash',upi:'UPI',online:'Online'};
 
 /* ---------- sample customers (deterministic, generated once) ---------- */
 let SAMPLE=null;
-function sample(){if(SAMPLE)return SAMPLE;
+function sample(){if(SAMPLE)return SAMPLE;if(window.MP_SERVER)return SAMPLE={accounts:[],events:[],users:[],guests:[],buys:[]};
   const TODAY=new Date(NOWD().getFullYear(),NOWD().getMonth(),NOWD().getDate(),12);
   let SEED=20261028;const rnd=()=>{SEED=(SEED*1664525+1013904223)%4294967296;return SEED/4294967296};
   const pick=a=>a[Math.floor(rnd()*a.length)],ri=(a,b)=>a+Math.floor(rnd()*(b-a+1));
@@ -77,14 +77,14 @@ function live(){const accounts=[],events=[],users=[],guests=[],buys=[],gmap=new 
     pur.forEach((p,i)=>buys.push({id:p.ref||'LIVE'+i,acc:A.id,date:p.at,qty:p.qty,amount:p.amount,method:p.amount?'UPI':'Free',status:'Paid',kind:p.kind||'',code:p.code||''}));
     evs.forEach(e=>{const t=calc(e.id),ms=S.moi.filter(m=>m.event_id===e.id);
       const entries=ms.map(m=>{const key=m.c.mobile||'n:'+m.c.name.toLowerCase();let g=gmap.get(key);
-        if(!g){g={id:'L'+gmap.size,live:true,name:m.c.name,mobile:m.c.mobile||'',city:m.c.place||A.city,consent:true,lang:evLang(e),events:0,total:0,first:null,last:null,rel:{}};gmap.set(key,g);guests.push(g)}
+        if(!g){g={id:'L'+gmap.size,live:true,name:m.c.name,mobile:m.c.mobile||'',city:m.c.place||A.city,consent:false,lang:evLang(e),events:0,total:0,first:null,last:null,rel:{}};gmap.set(key,g);guests.push(g)}
         if(m.c.consent)g.consent=true;g.events++;const amt=OK(m)&&!isItem(m)?+m.amount||0:0;g.total+=amt;if(!g.first||m.date<g.first)g.first=m.date;if(!g.last||m.date>g.last)g.last=m.date;g.rel[A.id]=1;
         return [g.id,amt,m.mode==='item'?'cash':m.mode,Math.max(0,RELS.indexOf(m.c.relationship)),isItem(m)?m.kind:'cash',m]});
       events.push({id:e.id,live:true,ref:e,no:e.no,acc:A.id,name:e.name,type:e.type,date:e.date,city:A.city,venue:e.venue,status:e.status,lang:evLang(e),modes:e.modes||{cash:1,upi:1,online:1},upis:upiAccs(e).length,gateway:e.gateway||'none',msgs:{wa:!!(e.notify&&e.notify.wa),sms:!!(e.notify&&e.notify.sms)},voice:voiceCfg(e).on,entries,
         helpers:S.eventUsers.filter(x=>x.event_id===e.id).map(x=>x.user_id),expenses:t.expenses,payouts:t.payouts,total:t.total,msgN:(A.wallet.usage||{})[e.id]||0,created:e.created_at||A.signup,pendingN:t.pendingN,returns:t.returns})});
     us.forEach(u=>{const days=[...new Set(S.audit.filter(l=>l.uid===u.id||(!l.uid&&l.user===u.name&&(l.acc||'A1001')===A.id)).map(l=>String(l.at).slice(0,10)))].sort();
       users.push({id:u.id,live:true,ref:u,name:u.name,role:u.role==='admin'?'Owner':ROLE[u.role],acc:A.id,mobile:u.mobile||'',username:u.username,days,last:days[days.length-1]||null,device:'Moi Point web',status:u.status})});
-    (S.guests||[]).filter(r=>r.acc===A.id&&r.name).forEach(r=>{const key=r.mobile||'n:'+r.name.toLowerCase();if(gmap.has(key)){gmap.get(key).rel[A.id]=1;return}const g={id:'L'+gmap.size,live:true,manual:true,name:r.name,mobile:r.mobile||'',city:r.place||A.city,consent:true,lang:A.lang||'ta',events:0,total:0,first:null,last:null,rel:{[A.id]:1}};gmap.set(key,g);guests.push(g)});
+    (S.guests||[]).filter(r=>r.acc===A.id&&r.name).forEach(r=>{const key=r.mobile||'n:'+r.name.toLowerCase();if(gmap.has(key)){gmap.get(key).rel[A.id]=1;return}const g={id:'L'+gmap.size,live:true,manual:true,name:r.name,mobile:r.mobile||'',city:r.place||A.city,consent:false,lang:A.lang||'ta',events:0,total:0,first:null,last:null,rel:{[A.id]:1}};gmap.set(key,g);guests.push(g)});
     a.lastActive=users.filter(u=>u.acc===A.id).map(u=>u.last).filter(Boolean).sort().pop()||A.signup});
   guests.forEach(g=>{const p=g.mobile&&pplGet(g.mobile);if(p){g.name=p.name;if(p.place)g.city=p.place;g.master=1}});
   return {accounts,events,users,guests,buys}}
@@ -418,7 +418,7 @@ function pAnnounce(){const L=P().announcements;
 
 const cf={aud:'organizers',city:'',min:'',plan:'',seg:'all',ch:'app',msg:'',tot:''};
 const TPL={guests:'Vanakkam {name}! You gave Moi at a function that used Moi Point. Planning your own function? Record every Moi, print receipts and get a Moi Book free. moipoint.in',organizers:'Vanakkam {name}! Your function is coming up. Top up WhatsApp receipt credits now. Use code MUHURTHAM20 for 20% off.'};
-function audience(){const t=dk(NOWD()),t30=dk(addD(NOWD(),-30));if(cf.aud==='guests')return GST.filter(g=>g.mobile&&(!cf.city||g.city===cf.city)&&(!cf.min||g.events>=+cf.min)&&(!cf.tot||g.total>=+cf.tot));
+function audience(){const t=dk(NOWD()),t30=dk(addD(NOWD(),-30));if(cf.aud==='guests')return GST.filter(g=>g.mobile&&g.consent&&(!cf.city||g.city===cf.city)&&(!cf.min||g.events>=+cf.min)&&(!cf.tot||g.total>=+cf.tot));
   return D.accounts.filter(a=>status(a)==='active'&&(!cf.city||a.city===cf.city)&&(!cf.plan||plan(a)===cf.plan)&&(cf.seg==='all'||(cf.seg==='low'?bal(a)<P().pricing.low:cf.seg==='dormant'?a.lastActive<t30:cf.seg==='new'?a.signup>=dk(addD(NOWD(),-14)):cf.seg==='renew'?subSt(a)!=='active':a.events.some(id=>EV[id].date>=t))))}
 function pCampaigns(){const aud=audience(),n=aud.length,paidCh=cf.ch!=='app',cost=paidCh?n*(cf.ch==='both'?2:1)*RATE():0,msg=cf.msg||TPL[cf.aud],liveN=aud.filter(x=>x.live).length;
   const cities=[...new Set(D.accounts.map(a=>a.city).concat(GST.map(g=>g.city)))].filter(Boolean).sort();if(cf.aud==='guests'&&cf.ch==='app')cf.ch='wa';
@@ -827,7 +827,7 @@ const A={
  cSend:md=>{md=md&&md.btn?md:{};const aud=audience(),n=aud.length,paidCh=cf.ch!=='app',cost=paidCh?n*(cf.ch==='both'?2:1)*RATE():0,msg=cf.msg||TPL[cf.aud],media=(md.img||md.url||md.vid)?{img:md.img||null,url:md.url||'',vid:md.vid||'',btn:md.btn||'Learn more'}:null;
    if(cf.aud==='organizers')aud.filter(a=>a.live).forEach(a=>{notifyOwner(a,msg.replace('{name}',String(a.owner).split(' ')[0]));if(media)S.notifications[S.notifications.length-1].media=media});
    P().campaigns.unshift({name:cf.aud==='guests'?'Guests'+(cf.city?' in '+cf.city:'')+' · start your own event':'Organizers · '+({all:'all active',up:'upcoming event',low:'low credits',renew:'plan ending',new:'new accounts',dormant:'inactive 30 days'})[cf.seg],n,ch:({app:'In app',wa:'WhatsApp',sms:'SMS',both:'WhatsApp + SMS'})[cf.ch],cost,at:Date.now(),media,text:msg});medClear('cmp');cf.msg='';
-   if(paidCh)platMsg('campaign',n*(cf.ch==='both'?2:1),'campaign');alog('Campaign sent',`${num(n)} people · ${cost?inr(cost):'free'}`);save();rr();toast(`Sent to ${num(n)} ${cf.aud==='guests'?'guests':'organizers'}`)},
+   if(paidCh)mpCampaign(cf.aud,cf.ch,msg,aud);alog('Campaign sent',`${num(n)} people · ${cost?inr(cost):'free'}`);save();rr();toast(`Sent to ${num(n)} ${cf.aud==='guests'?'guests':'organizers'}`)},
  csv:b=>{const k=b.dataset.k;let rows;
    if(k==='guests')rows=[['Name','Mobile','City','Functions','Total given','Last Moi','Language']].concat(guestRows().map(g=>[g.name,g.mobile,g.city,g.events,g.total,g.last,LNAME[g.lang]||g.lang]));
    else if(k==='accounts')rows=[['ID','Account','Owner','Mobile','City','Plan','Events','Credits left','Joined','Source','Last active','Status']].concat(accRows().map(a=>[a.id,a.name,a.owner,R().contacts?a.mobile:'hidden',a.city,P().plans[plan(a)].name,a.events.length,R().money?bal(a):'',a.signup,a.source,a.lastActive,status(a)]));
@@ -846,10 +846,10 @@ const A={
  mSusp:b=>{const a=ACC[b.dataset.id];openModal(`${mh('Suspend '+esc(a.name)+'?')}<form data-mform="susp" data-id="${a.id}"><div class="md-b"><p class="muted">The owner and helpers are logged out and can’t log in until you reactivate. Their data stays safe and their QR pages stop taking Moi.</p><label class="xfield"><span>Reason</span><input id="ms_r" required placeholder="e.g. misuse reported"></label></div><div class="md-f"><button type="button" class="btn btn-ghost" data-act="close">Cancel</button><button class="btn btn-danger">Suspend</button></div></form>`)},
  unsusp:b=>{const a=ACC[b.dataset.id];if(a.live)a.ref.status='active';else over(a).status='active';alog('Account reactivated',a.name);notifyOwner(a,'Your Moi Point account is active again.');save();rr();toast('Account reactivated')},
  mMsg:b=>{const a=ACC[b.dataset.id];openModal(`${mh('Message '+esc(a.owner))}<form data-mform="msg1" data-id="${a.id}"><div class="md-b"><label class="xfield"><span>Message</span><textarea id="mm_t" rows="4" required>Vanakkam ${esc(String(a.owner).split(' ')[0])}! </textarea></label><p class="small muted">${a.live?'Shows in their app notifications.':'Sample account: recorded only.'}</p></div><div class="md-f"><button type="button" class="btn btn-ghost" data-act="close">Cancel</button><button class="btn btn-primary">Send</button></div></form>`)},
- resetPw:b=>{const a=ACC[b.dataset.id],temp='mp'+tok().slice(0,6);if(a.live){const u=S.users.find(x=>x.id===a.ownerId);if(u)u.pw=hash(temp)}alog('Password reset',a.name);save();
+ resetPw:b=>{const a=ACC[b.dataset.id],temp='mp'+tok().slice(0,6)+'7';if(a.live){const u=S.users.find(x=>x.id===a.ownerId);if(u)MPS.pw[u.id]=temp}alog('Password reset',a.name);save();
    openModal(`${mh('New password for '+esc(a.owner))}<div class="md-b"><p>Share this with ${esc(a.owner)} on a call or WhatsApp. They can log in with their username <b>@${esc(a.live?(S.users.find(x=>x.id===a.ownerId)||{}).username:'')}</b> and this password.</p><p class="xtemp">${temp}</p></div><div class="md-f"><button class="btn btn-ghost" data-mact="copy" data-text="${temp}">Copy</button><button class="btn btn-primary" data-act="close">Done</button></div>`)},
  imp:b=>{const a=ACC[b.dataset.id];if(!a.live)return;const u=S.users.find(x=>x.id===a.ownerId);if(!u)return;alog('Opened customer app',a.name);
-   try{sessionStorage.setItem('mp-imp',me.id);sessionStorage.setItem(SK,u.id);localStorage.removeItem(SK)}catch(e){}UI.drawer=null;me=u;log(null,'Support view opened','Moi Point support');save();go('dashboard')},
+   UI.drawer=null;mpImpersonate(u)},
  rg:b=>{const r=RGS[b.dataset.st];r.k=b.dataset.v;if(r.k==='custom'&&!r.from){r.from=dk(addD(NOWD(),-6));r.to=dk(NOWD())}Object.values(TB).forEach(t=>t.page=0);rr()},
  guest:b=>{UI.drawer=['guest',b.dataset.id];rr()},
  sbSt:b=>{sbf.st=b.dataset.v;if(TB.subs)TB.subs.page=0;rr()},
@@ -935,7 +935,7 @@ const F={
    if(fee!==cur[0]||gst!==cur[1]||(P().gwPlan&&from!==P().gwPlan.from)){P().gwPlan={fee,gst,from,by:me.name,at:Date.now()};gwApply();
      if(f.querySelector('#pf_gwtell').checked)S.accounts.forEach(A=>S.notifications.push({id:uid('n'),owner:A.owner,channel:'In app',to:'You',text:`Online payment fee ${from<=dk(NOWD())?'is now':'changes from '+df(from)+' to'} ${fee}% + ${gst}% GST (was ${cur[0]}% + ${cur[1]}%). Moi already received keep their old fee.`,status:'Sent',at:Date.now()}))}}P().pricing.validDays=Math.max(1,Math.round(nv('pf_valid')||365));P().defaultPlan=f.querySelector('#pf_plan').value;P().pricing.trial=+f.querySelector('#pf_trial').value||0;alog('Platform settings changed',`Free ${P().freeDays} days · gateway ${P().gwFee}% + ${P().gwGst}% GST · credits valid ${P().pricing.validDays} days`);save();rr();toast('Saved')},
  team:f=>{const v=id=>f.querySelector('#'+id).value.trim(),m=normMob(v('mt_m')),un=v('mt_u').toLowerCase();if(!v('mt_n'))return bad(f,'mt_n','Enter a name');if(!mobOk(m))return bad(f,'mt_m',MOBERR);if(!/^[a-z0-9._]{3,}$/.test(un))return bad(f,'mt_u','Use at least 3 letters or numbers');if(S.users.some(u=>u.username===un))return bad(f,'mt_u','That username is taken');if(v('mt_p').length<6)return bad(f,'mt_p','Password needs at least 6 characters');
-   S.users.push({id:uid('p'),name:v('mt_n'),email:'',mobile:m,username:un,pw:hash(v('mt_p')),role:'platform',prole:v('mt_r'),status:'active'});alog('Admin added',v('mt_n'));save();closeModal();rr();toast('Admin added. Share the username and password with them.')}
+   if(!pwOk(v('mt_p')))return bad(f,'mt_p','Use 8 or more characters with letters and numbers');{const nu={id:uid('p'),name:v('mt_n'),email:'',mobile:m,username:un,role:'platform',prole:v('mt_r'),status:'active'};MPS.pw[nu.id]=v('mt_p');S.users.push(nu)}alog('Admin added',v('mt_n'));save();closeModal();rr();toast('Admin added. Share the username and password with them.')}
 };
 document.addEventListener('click',e=>{const l=e.target.closest('.xrail a[href]');if(l&&UI.menu){UI.menu=false;if(l.getAttribute('href')===location.hash){e.preventDefault();rr()}}const b=e.target.closest('[data-mact]');if(b&&A[b.dataset.mact]){e.preventDefault();if(mxLocked(b.dataset.mact))return;A[b.dataset.mact](b)}});
 document.addEventListener('keydown',e=>{if(e.key==='Enter'){const r=e.target.closest&&e.target.closest('tr.click[data-mact]');if(r)A[r.dataset.mact](r)}if(e.key==='Escape'&&UI.drawer&&!$('#modal').innerHTML){UI.drawer=null;rr()}});

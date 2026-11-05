@@ -1,7 +1,8 @@
 /* ---------- helpers ---------- */
+window.MP_SERVER=true; /* data lives on the server: see 90-server.js */
 const K='moipoint-v7',SK='moipoint-session';
 const $=s=>document.querySelector(s);
-const uid=p=>p+Math.random().toString(36).slice(2,9);
+const uid=p=>p+Array.from(crypto.getRandomValues(new Uint8Array(8)),b=>b.toString(16).padStart(2,'0')).join('');
 const tok_=()=>{const a='abcdefghjkmnpqrstuvwxyz23456789';let s='';for(const x of crypto.getRandomValues(new Uint8Array(20)))s+=a[x%a.length];return s};
 const tok=()=>{const a='abcdefghjkmnpqrstuvwxyz23456789';let s='';for(const x of crypto.getRandomValues(new Uint8Array(10)))s+=a[x%a.length];return s};
 const hash=s=>{let h=5381;for(let i=0;i<s.length;i++)h=((h<<5)+h+s.charCodeAt(i))>>>0;return 'djb2$'+h.toString(16)};

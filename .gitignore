@@ -7,3 +7,5 @@ uploads/
 *.log
 test-results/
 playwright-report/
+tsconfig.tsbuildinfo
+apps/api/dist/

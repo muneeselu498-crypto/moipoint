@@ -69,7 +69,7 @@ function bad(f,id,msg){const el=f.querySelector('#'+id);if(el){el.classList.add(
 /* ---------- moi creation ---------- */
 function createMoi(ev,c,amount,mode,status,meta,ctx){
   if(!takesMoi(ev))throw new Error('Event is '+ev.status+'; Moi can’t be received');
-  S.seq++;ev.moiSeq=Math.max(+ev.moiSeq||0,S.moi.filter(x=>x.event_id===ev.id).length);let n=ev.moiSeq+1;while(S.moi.some(x=>x.code===moiNo(ev,n)))n++;ev.moiSeq=n;const m={id:'m'+S.seq+Math.random().toString(36).slice(2,5),code:moiNo(ev,n),device:DEV,pending:!online(),event_id:ev.id,c,amount,mode,status,utr:meta.utr||'',ref:meta.ref||'',gref:meta.gref||'',shot:meta.shot||null,date:meta.date||today(),time:meta.time||nowT(),collected_by:ctx==='staff'?me.id:'qr',created_at:Date.now(),upiAcc:meta.upiAcc!=null?meta.upiAcc:undefined,fee:meta.fee||0,feeBy:meta.feeBy||undefined,kind:meta.kind||'cash',gift:meta.gift||null,est:meta.est||0};
+  S.seq++;ev.moiSeq=Math.max(+ev.moiSeq||0,S.moi.filter(x=>x.event_id===ev.id).length);let n=ev.moiSeq+1;while(S.moi.some(x=>x.code===moiNo(ev,n)))n++;ev.moiSeq=n;const m={id:uid('m'),code:moiNo(ev,n),device:DEV,pending:!online(),event_id:ev.id,c,amount,mode,status,utr:meta.utr||'',ref:meta.ref||'',gref:meta.gref||'',shot:meta.shot||null,date:meta.date||today(),time:meta.time||nowT(),collected_by:ctx==='staff'?me.id:'qr',created_at:Date.now(),upiAcc:meta.upiAcc!=null?meta.upiAcc:undefined,fee:meta.fee||0,feeBy:meta.feeBy||undefined,kind:meta.kind||'cash',gift:meta.gift||null,est:meta.est||0};
   S.moi.push(m);try{pplPut(moiPpl(m),'moi',m.created_at)}catch(_){}log(ev.id,'Moi added',`${amtTxt(m)} from ${c.name} · ${isItem(m)?kindT(m.kind,'en'):MODE[mode]}`);if(ctx==='public')qrNotify(ev,m);else notify(ev,m,status==='verified'?'verified':'received');save();return m;
 }
 function submitMoi(ctx,f){
@@ -96,6 +96,7 @@ function submitMoi(ctx,f){
   if(fl.mode==='online'&&!online())return toast('Online payment needs internet. Choose Cash or Offline UPI.','bad');
   if(fl.mode==='online'){fl.stage='pay';fl.draft={c,amount,meta};fl.payRef='PR'+Date.now().toString(36).toUpperCase();lastH='';return render()}
   const status=fl.mode==='cash'?(ctx==='staff'?'received':'tocollect'):'pending';
+  if(ctx==='public')return mpGuestMoi(ev,c,amount,fl.mode,{utr:meta.utr,shot:fl.mode==='upi'?imgBuf[px+'shot']:null,upiAcc:fl.mode==='upi'?(fl.upiAcc||0):null});
   const m=createMoi(ev,c,amount,fl.mode,status,{...meta,shot:fl.mode==='upi'?imgBuf[px+'shot']:null,upiAcc:fl.mode==='upi'?(fl.upiAcc||0):null},ctx);
   announce(ev,m);
   imgBuf[px+'shot']=null;fl.stage='done';fl.moiId=m.id;lastH='';render();
@@ -237,6 +238,7 @@ const ACT={
     const st=$('#wzSubmitTxt');if(st&&px==='m')st.textContent=fl.mode==='online'?'Generate payment QR':'Submit Moi'},
   amt:b=>{const i=$('#'+b.dataset.px+'_amount');i.value=b.dataset.v;i.classList.remove('invalid');updSum(b.dataset.px)},
   paySim:b=>{if(!online())return toast('Internet dropped. The payment will confirm once you’re back online.','bad');const ctx=b.dataset.ctx,fl=flows[ctx],ev=S.events.find(e=>e.id===fl.eid),d=fl.draft;const g=gwCalc(ev,d.amount);
+    if(ctx==='public'){if(fl.payFor)return toast('Online payment isn’t available yet. Please pay at the counter.','bad');return mpGuestMoi(ev,d.c,d.amount,'online',{fee:g.fee,feeBy:g.guest?'guest':'family'})}
     if(fl.payFor){const m=S.moi.find(x=>x.id===fl.payFor);if(m){m.mode='online';m.status='verified';m.gref='pay_'+tok();m.fee=g.fee;m.feeBy=g.guest?'guest':'family';m.shot=null;log(ev.id,'Paid online',`${fmt(m.amount)} from ${m.c.name} · ${m.code}`);qrNotify(ev,m);announce(ev,m);save();fl.payFor=null;fl.stage='done';fl.moiId=m.id;lastH='';render();return toast('Payment confirmed')}}const m=createMoi(ev,d.c,d.amount,'online','verified',{...d.meta,gref:'pay_'+tok(),fee:g.fee,feeBy:g.guest?'guest':'family'},ctx);announce(ev,m);fl.stage='done';fl.moiId=m.id;lastH='';render();toast('Payment confirmed')},
   payCancel:b=>{const fl=flows[b.dataset.ctx];if(fl.payFor){fl.stage='done';fl.moiId=fl.payFor;fl.payFor=null}else fl.stage='form';lastH='';render()},
   flowNew:b=>{const ctx=b.dataset.ctx;flows[ctx]={eid:flows[ctx].eid,stage:'form',mode:ctx==='staff'?'cash':'online',kind:'cash'};imgBuf.mitem=null;imgBuf.mshot=null;lastH='';render()},
@@ -402,7 +404,7 @@ const FORMS={
     const nwa=f.querySelector('#n_wa');if(nwa)data.notify={wa:nwa.checked,sms:f.querySelector('#n_sms').checked};
     if(data.notify&&(data.notify.wa||data.notify.sms)&&crState()!=='ok')setTimeout(()=>toast(crState()==='zero'?'Messages are on, but you have no credits. Buy credits so receipts go out.':'Messages are on. Credits are running low.','bad'),3000);
     if(f.dataset.id){const e=S.events.find(x=>x.id===f.dataset.id);Object.assign(e,data);log(e.id,'Updated','Event details');save();closeModal();toast('Event saved');render()}
-    else{S.evSeq=(S.evSeq||0)+1;const e={id:'e'+Math.random().toString(36).slice(2,8),no:evNo(S.evSeq),acc:me.acc,token:tok(),created_by:me.id,created_at:today(),upi:'',payee:data.organizer,gateway:'none',notify:{wa:true,sms:false,email:false},...data};S.events.push(e);log(e.id,'Event created',e.name);{const fcr=grantEventCredits(e);if(fcr)setTimeout(()=>toast(fcr+' free message credits added for this event','good'),1400)}
+    else{S.evSeq=(S.evSeq||0)+1;const e={id:uid('e'),no:evNo(S.evSeq),acc:me.acc,token:tok(),created_by:me.id,created_at:today(),upi:'',payee:data.organizer,gateway:'none',notify:{wa:true,sms:false,email:false},...data};S.events.push(e);log(e.id,'Event created',e.name);{const fcr=grantEventCredits(e);if(fcr)setTimeout(()=>toast(fcr+' free message credits added for this event','good'),1400)}
       team.people.forEach(p=>{const lk=p.link&&S.users.find(x=>x.id===p.link);const u=lk||{id:uid('u'),acc:me.acc,name:p.name,email:p.username,mobile:p.mobile,username:p.username,role:p.role,status:'active'};if(!lk){setPw(u,p.pw);S.users.push(u)}[e.id,...p.others].forEach(eid=>grantEv(eid,u,p.role,eid===e.id?p.access:{mode:'always'},p.perm||undefined));log(e.id,lk?'Helper linked':'User created',`${u.name} · ${ROLE[u.role]} · ${1+p.others.length} event${p.others.length?'s':''}`)});
       team.existing.forEach(x=>{const u=S.users.find(y=>y.id===x.id);if(!u)return;grantEv(e.id,u,x.role);log(e.id,'Updated',`${u.name} given ${ROLE[x.role]} access`)});
       const nt=team.people.length+team.existing.length;if(!nt&&myAcc())myAcc().onboard.self=true;save();closeModal();toast(nt?`Event created with ${nt} helper${nt>1?'s':''}`:'Event created. You are the Moi collector.');go(`ev-${e.id}-overview`)}},

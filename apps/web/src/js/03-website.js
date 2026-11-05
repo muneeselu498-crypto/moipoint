@@ -242,7 +242,7 @@ function lOtpSend(){const o=lo;if(!o)return;if(o.sends>=3)return lOtpView('Too m
 function lOtpView(err){const o=lo;if(!o)return;
   openModal(`${mh('Confirm your mobile','Code sent by SMS to +91 '+maskMob(o.mobile))}<form data-form="lOtp" novalidate><div class="md-b stack" style="gap:14px">
     ${err?`<div class="note bad">${ic('alert',20)}<div><b>${esc(err)}</b></div></div>`:`<label class="field" for="lo_code"><span>6-digit code</span><input id="lo_code" class="otp-in" inputmode="numeric" maxlength="6" autocomplete="one-time-code" placeholder="••••••" required></label>
-    <p class="small muted"><span>Demo code (in the live app it comes by SMS):</span> <b class="tx" data-noi18n>${o.code}</b></p>`}
+    ${o.code?`<p class="small muted"><span>Demo code (in the live app it comes by SMS):</span> <b class="tx" data-noi18n>${o.code}</b></p>`:''}`}
     <div class="btn-row"><button type="button" class="btn btn-ghost btn-sm" data-act="loRe" id="loRe" ${Date.now()<o.next?'disabled':''}>Resend code</button><button type="button" class="btn btn-ghost btn-sm" data-act="loBack">Change number</button></div></div>
     <div class="md-f"><button type="button" class="btn btn-ghost" data-act="close">Cancel</button>${err?'':`<button class="btn btn-primary">${ic('check',18)}Confirm</button>`}</div></form>`);
   clearInterval(lo.t);lo.t=setInterval(()=>{const b=document.getElementById('loRe');if(!b||!lo){clearInterval(lo&&lo.t);return}if(Date.now()>=lo.next){b.disabled=false;clearInterval(lo.t)}},1000);

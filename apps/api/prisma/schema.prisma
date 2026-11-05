@@ -1,0 +1,393 @@
+// Moi Point database.
+//
+// The screens work with rich records (a Moi entry has dozens of fields), so each table
+// keeps the full record in `data` and lifts the fields the server must search, join or
+// protect into real columns. Those real columns are what the constraints below act on.
+//
+// `rev` is the sync counter: every change gets the next number, and a device asks for
+// "everything after the number I last saw". `deleted` keeps removals visible to other devices.
+
+generator client {
+  provider = "prisma-client-js"
+}
+
+datasource db {
+  provider = "postgresql"
+  url      = env("DATABASE_URL")
+}
+
+/// One row. Updating it hands out the next `rev` and makes writers take turns.
+model SyncCounter {
+  id  Int    @id @default(1)
+  rev BigInt @default(0)
+}
+
+/// Settings Master Admin owns: plans, prices, website content. One row per setting.
+model PlatformDoc {
+  key       String   @id
+  data      Json
+  rev       BigInt   @default(0)
+  updatedAt DateTime @updatedAt
+}
+
+model Account {
+  id        String   @id
+  name      String
+  status    String   @default("active")
+  plan      String   @default("free")
+  ownerId   String?
+  /// Only the server changes this. Browsers can never add credits to themselves.
+  wallet    Json
+  data      Json
+  rev       BigInt   @default(0)
+  deleted   Boolean  @default(false)
+  createdAt DateTime @default(now())
+  updatedAt DateTime @updatedAt
+
+  @@index([rev])
+}
+
+model User {
+  id           String   @id
+  accountId    String?
+  email        String?  @unique
+  username     String   @unique
+  mobile       String?
+  role         String
+  platformRole String?
+  status       String   @default("active")
+  /// argon2. Never leaves the server.
+  passwordHash String?
+  data         Json
+  rev          BigInt   @default(0)
+  deleted      Boolean  @default(false)
+  createdAt    DateTime @default(now())
+  updatedAt    DateTime @updatedAt
+
+  sessions Session[]
+
+  @@index([accountId])
+  @@index([mobile])
+  @@index([rev])
+}
+
+model Event {
+  id        String   @id
+  accountId String
+  /// The public event number, such as EV003. Unique across all customers.
+  no        String   @unique
+  token     String?  @unique
+  date      String?
+  status    String   @default("active")
+  /// Last receipt number given out for this function.
+  moiSeq    Int      @default(0)
+  data      Json
+  rev       BigInt   @default(0)
+  deleted   Boolean  @default(false)
+  createdAt DateTime @default(now())
+  updatedAt DateTime @updatedAt
+
+  @@index([accountId])
+  @@index([rev])
+}
+
+model EventUser {
+  id        String   @id
+  accountId String
+  eventId   String
+  userId    String
+  role      String
+  data      Json
+  rev       BigInt   @default(0)
+  deleted   Boolean  @default(false)
+  createdAt DateTime @default(now())
+  updatedAt DateTime @updatedAt
+
+  @@index([eventId])
+  @@index([userId])
+  @@index([rev])
+}
+
+model Moi {
+  id        String   @id
+  accountId String
+  eventId   String
+  /// Receipt number, such as EV003/016. Two phones can never get the same one.
+  code      String   @unique
+  seq       Int
+  mobile    String?
+  status    String
+  mode      String
+  amount    Int      @default(0)
+  data      Json
+  rev       BigInt   @default(0)
+  deleted   Boolean  @default(false)
+  createdAt DateTime @default(now())
+  updatedAt DateTime @updatedAt
+
+  @@unique([eventId, seq])
+  @@index([accountId])
+  @@index([mobile])
+  @@index([rev])
+}
+
+model Expense {
+  id        String   @id
+  accountId String
+  eventId   String
+  data      Json
+  rev       BigInt   @default(0)
+  deleted   Boolean  @default(false)
+  createdAt DateTime @default(now())
+  updatedAt DateTime @updatedAt
+
+  @@index([eventId])
+  @@index([rev])
+}
+
+model Payout {
+  id        String   @id
+  accountId String
+  eventId   String
+  data      Json
+  rev       BigInt   @default(0)
+  deleted   Boolean  @default(false)
+  createdAt DateTime @default(now())
+  updatedAt DateTime @updatedAt
+
+  @@index([eventId])
+  @@index([rev])
+}
+
+model Guest {
+  id        String   @id
+  accountId String
+  data      Json
+  rev       BigInt   @default(0)
+  deleted   Boolean  @default(false)
+  createdAt DateTime @default(now())
+  updatedAt DateTime @updatedAt
+
+  @@index([accountId])
+  @@index([rev])
+}
+
+model GuestGroup {
+  id        String   @id
+  accountId String
+  data      Json
+  rev       BigInt   @default(0)
+  deleted   Boolean  @default(false)
+  createdAt DateTime @default(now())
+  updatedAt DateTime @updatedAt
+
+  @@index([accountId])
+  @@index([rev])
+}
+
+model Reminder {
+  id        String   @id
+  accountId String?
+  ownerId   String
+  data      Json
+  rev       BigInt   @default(0)
+  deleted   Boolean  @default(false)
+  createdAt DateTime @default(now())
+  updatedAt DateTime @updatedAt
+
+  @@index([ownerId])
+  @@index([rev])
+}
+
+/// What each person sees in the app's notification list. A WhatsApp or SMS row here is also a send request.
+model Notification {
+  id           String    @id
+  accountId    String?
+  eventId      String?
+  ownerId      String?
+  channel      String
+  status       String
+  /// Set once the server has acted on this row, so a message can never go out twice.
+  dispatchedAt DateTime?
+  data         Json
+  rev          BigInt    @default(0)
+  deleted      Boolean   @default(false)
+  createdAt    DateTime  @default(now())
+  updatedAt    DateTime  @updatedAt
+
+  @@index([accountId])
+  @@index([eventId])
+  @@index([ownerId])
+  @@index([rev])
+}
+
+model MsgLog {
+  id        String   @id
+  accountId String
+  eventId   String?
+  data      Json
+  rev       BigInt   @default(0)
+  deleted   Boolean  @default(false)
+  createdAt DateTime @default(now())
+  updatedAt DateTime @updatedAt
+
+  @@index([accountId])
+  @@index([rev])
+}
+
+model Audit {
+  id        String   @id
+  accountId String?
+  eventId   String?
+  data      Json
+  rev       BigInt   @default(0)
+  deleted   Boolean  @default(false)
+  createdAt DateTime @default(now())
+  updatedAt DateTime @updatedAt
+
+  @@index([accountId])
+  @@index([rev])
+}
+
+/// The shared guest directory, one record per mobile number, so known guests fill in by themselves.
+model Person {
+  mobile    String   @id
+  accounts  String[]
+  data      Json
+  rev       BigInt   @default(0)
+  deleted   Boolean  @default(false)
+  updatedAt DateTime @updatedAt
+
+  @@index([rev])
+}
+
+model Ticket {
+  id        String   @id
+  accountId String
+  data      Json
+  rev       BigInt   @default(0)
+  deleted   Boolean  @default(false)
+  createdAt DateTime @default(now())
+  updatedAt DateTime @updatedAt
+
+  @@index([accountId])
+  @@index([rev])
+}
+
+model Lead {
+  id        String   @id
+  data      Json
+  rev       BigInt   @default(0)
+  deleted   Boolean  @default(false)
+  createdAt DateTime @default(now())
+  updatedAt DateTime @updatedAt
+
+  @@index([rev])
+}
+
+model StockAlert {
+  id        String   @id
+  accountId String?
+  data      Json
+  rev       BigInt   @default(0)
+  deleted   Boolean  @default(false)
+  createdAt DateTime @default(now())
+  updatedAt DateTime @updatedAt
+
+  @@index([rev])
+}
+
+// ---------- server-only tables: these never sync to a browser ----------
+
+model Session {
+  id             String   @id @default(uuid())
+  /// SHA-256 of the cookie value, so a stolen database cannot log anyone in.
+  tokenHash      String   @unique
+  userId         String
+  user           User     @relation(fields: [userId], references: [id], onDelete: Cascade)
+  /// Set while Moi Point support is viewing a customer's account.
+  impersonatorId String?
+  remember       Boolean  @default(true)
+  expiresAt      DateTime
+  createdAt      DateTime @default(now())
+  lastSeenAt     DateTime @default(now())
+
+  @@index([userId])
+}
+
+model OtpCode {
+  id         String    @id @default(uuid())
+  purpose    String
+  target     String
+  scope      String    @default("")
+  codeHash   String
+  tries      Int       @default(0)
+  expiresAt  DateTime
+  verifiedAt DateTime?
+  /// Proof handed back after a correct code, used once for the next step.
+  ticketHash String?
+  usedAt     DateTime?
+  createdAt  DateTime  @default(now())
+
+  @@index([purpose, target, scope])
+}
+
+/// Every message the app sends. This is the outbox and the delivery record.
+model Message {
+  id             String    @id @default(uuid())
+  notificationId String?   @unique
+  accountId      String?
+  eventId        String?
+  /// Trigger ID from the automation report, such as C1 or M4.
+  trigger        String
+  channel        String
+  to             String
+  text           String
+  vars           Json?
+  media          Json?
+  paidBy         String
+  status         String    @default("queued")
+  provider       String?
+  providerRef    String?
+  error          String?
+  /// Links a guest message back to its row on the Messages sent screen.
+  logId          String?
+  createdAt      DateTime  @default(now())
+  sentAt         DateTime?
+  deliveredAt    DateTime?
+  readAt         DateTime?
+
+  @@index([createdAt])
+  @@index([accountId])
+  @@index([providerRef])
+}
+
+/// Permanent ledger of every credit added or removed.
+model CreditTxn {
+  id        String   @id @default(uuid())
+  accountId String
+  qty       Int
+  amount    Int      @default(0)
+  kind      String
+  ref       String?
+  code      String?
+  by        String?
+  createdAt DateTime @default(now())
+
+  @@index([accountId])
+}
+
+model Payment {
+  id        String   @id @default(uuid())
+  accountId String
+  provider  String
+  purpose   String
+  qty       Int      @default(0)
+  amount    Int
+  status    String
+  ref       String?
+  meta      Json?
+  createdAt DateTime @default(now())
+
+  @@index([accountId])
+}

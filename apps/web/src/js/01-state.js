@@ -105,7 +105,7 @@ function seed(){
   return S;
 }
 let S;try{S=JSON.parse(localStorage.getItem(K)||'null')}catch(e){S=null}
-if(!S||!S.events)S=seed();
+if(!S||!S.events)S=window.MP_SERVER?mpShell():seed();
 /* ---------- SaaS layer: accounts (one per family or business) + platform settings set by the Master Admin ---------- */
 const PLAN_KEYS=['free'];
 const FEATS=[['voice','Voice announcement after each Moi'],['book','Moi Book export'],['online','Online payment gateway'],['upi2','Second UPI account'],['logo','Event photo on receipts'],['brand','Remove Moi Point branding on receipts'],['support','Priority phone support']];
@@ -134,7 +134,7 @@ function initState(){
   if(Object.prototype.hasOwnProperty.call(S,'wallet')&&Object.getOwnPropertyDescriptor(S,'wallet').value!==undefined)delete S.wallet;
   const d=platformDefaults();S.platform=S.platform||{};for(const k in d)if(S.platform[k]==null)S.platform[k]=d[k];
   PLAN_KEYS.forEach(k=>{const p=S.platform.plans[k]=S.platform.plans[k]||clone(PLANS0[k]);p.feat={...PLANS0[k].feat,...(p.feat||{})}});
-  [['p1','Muneeswaran','master','master123','owner','9840012345'],['p2','Finance desk','finance','finance123','finance','9840022311'],['p3','Karthik (Support)','support','support123','support','9840033190'],['p4','Divya (Marketing)','marketing','marketing123','marketing','9840044207']].forEach(([id,name,un,pw,pr,mob])=>{
+  if(!window.MP_SERVER)[['p1','Muneeswaran','master','master123','owner','9840012345'],['p2','Finance desk','finance','finance123','finance','9840022311'],['p3','Karthik (Support)','support','support123','support','9840033190'],['p4','Divya (Marketing)','marketing','marketing123','marketing','9840044207']].forEach(([id,name,un,pw,pr,mob])=>{
     if(!S.users.some(u=>u.id===id))S.users.push({id,name,email:'',mobile:mob,username:un,pw:hash(pw),role:'platform',prole:pr,status:'active'})});
   if(S.evSeq==null){S.evSeq=0;S.events.slice().sort((a,b)=>String(a.created_at||'').localeCompare(String(b.created_at||''))).forEach(e=>{if(!e.no){S.evSeq++;e.no=evNo(S.evSeq,e.created_at)}})}
   if(!S.evNo3){const old=new Map();S.events.forEach(e=>{const m=String(e.no||'').match(/^EV-\d{4}-(\d+)$/i);if(m){const nn=evNo(+m[1]);old.set(e.id,[e.no,nn]);e.oldNo=e.no;e.no=nn}});

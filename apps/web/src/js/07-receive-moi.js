@@ -251,7 +251,7 @@ function qrOtpSend(){const o=qo,ev=S.events.find(e=>e.id===o.ev);if(o.sends>=3)r
 function qrOtpView(err){const o=qo;if(!o)return;const left=Math.max(0,Math.ceil((o.next-Date.now())/1000));
   openModal(`${mh('Confirm your mobile','Code sent by SMS to +91 '+fmtMob(o.mobile))}<form data-form="qrOtp" novalidate><div class="md-b stack" style="gap:14px">
     ${err?`<div class="note bad">${ic('alert',20)}<div><b>${esc(err)}</b></div></div>`:`<label class="field" for="qo_code"><span>6-digit code</span><input id="qo_code" class="otp-in" inputmode="numeric" maxlength="6" autocomplete="one-time-code" placeholder="••••••" required></label>
-    <p class="small muted"><span>Demo code (in the live app it comes by SMS):</span> <b class="code">${o.code}</b></p>
+    ${o.code?`<p class="small muted"><span>Demo code (in the live app it comes by SMS):</span> <b class="code">${o.code}</b></p>`:''}
     <div class="btn-row"><button type="button" class="btn btn-ghost btn-sm" data-act="otpRe" ${left?'disabled':''} id="qoRe">${left?`Resend in ${left}s`:'Resend code'}</button><button type="button" class="btn btn-ghost btn-sm" data-act="otpChange">Change number</button></div>`}
   </div><div class="md-f"><button type="button" class="btn btn-ghost" data-act="close">${err?'Close':'Cancel'}</button>${err?'':`<button class="btn btn-primary">${ic('check',18)}Confirm</button>`}</div></form>`);
   setTimeout(()=>{const i=document.getElementById('qo_code');if(i)i.focus()},40);
