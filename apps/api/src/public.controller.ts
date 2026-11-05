@@ -4,14 +4,16 @@ import { z } from 'zod';
 import { cfg } from './config';
 import { MessagesService } from './messages.service';
 import { OtpService } from './otp.service';
+import { mergePerson } from './people';
 import { PrismaService, Tx } from './prisma.service';
-import { StorageService } from './storage.service';
+import { isDataImage, StorageService } from './storage.service';
 import { StreamService } from './stream.service';
 import { fail, fmt, maskMob, mobOk, normMob, nowT, today, uid } from './util';
 import { spendCredit } from './wallet';
 
 const LIMIT = cfg.devTools ? 500 : 30;
 const GUEST_CODES_PER_HOUR = 300;
+const GUEST_ENTRIES_PER_HOUR = 10;
 const parse = <T>(schema: z.ZodType<T>, body: unknown): T => {
   const r = schema.safeParse(body);
   return r.success ? r.data : fail('Please check the details and try again.');
@@ -49,8 +51,10 @@ export class PublicController {
   private async findEvent(key: string) {
     const k = decodeURIComponent(String(key || ''));
     const up = k.toUpperCase().replace(/^EV-(\d+)$/, 'EV$1');
+    // the printed number always wins, so nothing can stand in for a real function's QR
     return (
-      (await this.prisma.event.findFirst({ where: { deleted: false, OR: [{ no: up }, { token: k }] } })) ??
+      (await this.prisma.event.findFirst({ where: { deleted: false, no: up } })) ??
+      (await this.prisma.event.findFirst({ where: { deleted: false, token: k } })) ??
       (await this.prisma.event.findFirst({ where: { deleted: false, data: { path: ['oldNo'], equals: up } } }))
     );
   }
@@ -85,7 +89,8 @@ export class PublicController {
     const m = normMob(b.mobile);
     if (!mobOk(m)) fail('Enter a valid 10-digit mobile number (starts with 6, 7, 8 or 9)');
     const ev = await this.prisma.event.findUnique({ where: { id: b.eventId } });
-    if (!ev || ev.deleted) return fail('This event link isn’t active');
+    if (!ev || ev.deleted || !['active', 'completed'].includes(ev.status)) return fail('This event link isn’t active');
+    if ((await this.prisma.account.findUnique({ where: { id: ev.accountId }, select: { status: true } }))?.status === 'suspended') fail('This event is paused. Please give your Moi at the counter.');
     // a public page could be used to burn a family's credits, so each function has an hourly ceiling
     const recent = await this.prisma.otpCode.count({ where: { purpose: 'guest', scope: ev.id, createdAt: { gte: new Date(Date.now() - 3600e3) } } });
     if (recent >= GUEST_CODES_PER_HOUR) fail('Too many codes right now. Please give your Moi at the counter.', 429);
@@ -138,13 +143,18 @@ export class PublicController {
     const b = parse(
       z.object({
         eventId: z.string(), mobile: z.string(), ticket: z.string(), mode: z.enum(['cash', 'upi', 'online']), amount: z.number().int().positive().max(100000000),
-        c: z.object({ name: z.string().min(1).max(120), relationship: z.string().max(80).optional(), place: z.string().max(120).optional(), designation: z.string().max(120).optional(), address: z.string().max(300).optional(), notes: z.string().max(500).optional(), alt: z.any().optional(), consent: z.boolean().optional() }),
-        utr: z.string().max(40).optional(), shot: z.string().max(12000000).nullable().optional(), upiAcc: z.number().int().min(0).max(20).nullable().optional(), fee: z.number().optional(), feeBy: z.string().max(10).optional(),
+        c: z.object({ name: z.string().min(1).max(120), relationship: z.string().max(80).optional(), place: z.string().max(120).optional(), designation: z.string().max(120).optional(), address: z.string().max(300).optional(), notes: z.string().max(500).optional(), alt: z.record(z.string(), z.string().max(200)).optional(), consent: z.boolean().optional() }),
+        utr: z.string().max(40).optional(), shot: z.string().max(12000000).nullable().optional(), upiAcc: z.number().int().min(0).max(20).nullable().optional(), fee: z.number().min(0).max(100000000).optional(), feeBy: z.enum(['guest', 'family']).optional(),
       }),
       body,
     );
     const mobile = normMob(b.mobile);
     if (!(await this.otp.peek('guest', mobile, b.eventId, b.ticket))) fail('Please confirm your mobile again.', 401);
+    // the screenshot goes straight into a page the family opens, so only a real image is kept
+    if (b.shot && !isDataImage(b.shot)) fail('Attach the payment screenshot as a photo.');
+    // each entry uses one of the family's credits, so one confirmed mobile can't keep adding them
+    const mine = await this.prisma.moi.count({ where: { eventId: b.eventId, mobile, createdAt: { gte: new Date(Date.now() - 3600e3) } } });
+    if (mine >= GUEST_ENTRIES_PER_HOUR) fail('Too many entries from this number. Please give your Moi at the counter.', 429);
     const ev = await this.prisma.event.findUnique({ where: { id: b.eventId } });
     if (!ev || ev.deleted || !['active', 'completed'].includes(ev.status)) return fail('This event isn’t taking Moi. Please give your Moi at the counter.');
     const acct = await this.prisma.account.findUnique({ where: { id: ev.accountId } });
@@ -171,6 +181,11 @@ export class PublicController {
         shot, date: today(), time: nowT(), collected_by: 'qr', created_at: Date.now(), upiAcc: b.upiAcc ?? undefined, fee: b.fee || 0, feeBy: b.feeBy, kind: 'cash', gift: null, est: 0,
       };
       await tx.moi.create({ data: { id, accountId: ev.accountId, eventId: ev.id, code, seq, mobile, status, mode: b.mode, amount: b.amount, data: m, rev } });
+      // the guest is known next time, the same as an entry made at the counter
+      const person = await tx.person.findUnique({ where: { mobile } });
+      const accounts = [...new Set([...(person?.accounts ?? []), ev.accountId])];
+      const known = mergePerson(person?.data, mobile, ev.accountId, accounts, { name: c.name, place: c.place, des: c.designation, rel: c.relationship, address: c.address, alt: c.alt, src: 'moi' }, !!b.c.consent);
+      await tx.person.upsert({ where: { mobile }, create: { mobile, accounts, data: known, rev }, update: { accounts, data: known, rev, deleted: false } });
       const auditId = uid('l');
       await tx.audit.create({ data: { id: auditId, accountId: ev.accountId, eventId: ev.id, rev, data: { id: auditId, acc: ev.accountId, uid: null, at: new Date().toISOString(), user: 'Guest (QR page)', role: 'Guest', eid: ev.id, action: 'Moi added', detail: `${fmt(b.amount)} from ${c.name}` } } });
       const lang = d.lang === 'en' ? 'en' : 'ta';

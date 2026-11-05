@@ -288,7 +288,7 @@ ACT.evGeo=b=>{const px=b.dataset.px,inp=document.getElementById(px+'map');if(!na
   const box=`<section class="c3-pubinfo card pad"><div class="c3-pi-row">${ic('cal',18)}<div><small>When</small><b>${dfmt(ev.date)} · ${tfmt(ev.start)} – ${tfmt(ev.end)}</b></div></div>
     <div class="c3-pi-row">${ic('pin',18)}<div><small>Where</small><b>${esc(ev.venue||'')}</b>${ev.address?`<span>${esc(ev.address)}</span>`:''}</div></div>
     ${ev.organizer?`<div class="c3-pi-row">${ic('user',18)}<div><small>Hosted by</small><b>${esc(ev.organizer)}</b></div></div>`:''}${inv&&inv.msg?`<p class="c3-pi-msg">${esc(inv.msg)}</p>`:''}
-    <div class="btn-row c3-pi-btns"><a class="btn btn-primary" href="${esc(map)}" target="_blank" rel="noopener">${ic('pin',18)}Get directions to the hall</a><a class="btn btn-ghost" href="#c3pay" onclick="document.querySelector('form[data-form=pub]')&&document.querySelector('form[data-form=pub]').scrollIntoView({behavior:'smooth'});return false">${ic('gift',18)}Give Moi</a></div></section>`;
+    <div class="btn-row c3-pi-btns"><a class="btn btn-primary" href="${esc(map)}" target="_blank" rel="noopener">${ic('pin',18)}Get directions to the hall</a><a class="btn btn-ghost" href="#c3pay" data-act="c3pay">${ic('gift',18)}Give Moi</a></div></section>`;
   return h.replace(/(<section class="pub-ev">[\s\S]*?<\/section>)/,`$1${box}`)}}
 /* ---------- messages: the right card comes ready (invitation → invitation card, thank you → thank-you card) ---------- */
 const kindCard=k=>k==='thanks'?'thanks':['invite','reception','maruveedu'].includes(k)?'invite':k==='update'?'remind':'';

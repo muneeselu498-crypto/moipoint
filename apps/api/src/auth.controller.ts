@@ -2,7 +2,7 @@ import { Body, Controller, Get, HttpCode, Post, Req, Res, UseGuards } from '@nes
 import { Throttle, ThrottlerGuard } from '@nestjs/throttler';
 import type { Response } from 'express';
 import { z } from 'zod';
-import { cfg } from './config';
+import { cfg, publicBase } from './config';
 import { MessagesService } from './messages.service';
 import { OtpService } from './otp.service';
 import { PrismaService } from './prisma.service';
@@ -31,7 +31,7 @@ export class AuthController {
   ) {}
 
   private clientCfg() {
-    return { devTools: cfg.devTools, messages: cfg.messageProvider, payments: cfg.paymentProvider };
+    return { devTools: cfg.devTools, messages: cfg.messageProvider, payments: cfg.paymentProvider, base: publicBase() };
   }
 
   private async stateFor(scope: Scope, extra: object = {}) {
@@ -135,9 +135,11 @@ export class AuthController {
     const byEmail = await this.prisma.user.findFirst({ where: { email, deleted: false, status: { not: 'deleted' } } });
     const byMobile = await this.prisma.user.findFirst({ where: { mobile, deleted: false, status: { not: 'deleted' }, role: { not: 'platform' } } });
     if (this.nonHelper(byMobile)) fail('This number already has an account. Log in with your email and password.', 409);
-    // someone who was a helper can become an owner and keep the same login
-    const upgrade = byEmail && !this.nonHelper(byEmail) && (!byMobile || byMobile.id === byEmail.id) ? byEmail : !byEmail && byMobile && !this.nonHelper(byMobile) ? byMobile : null;
+    // A helper can become an owner and keep the same login, but only on the mobile just confirmed.
+    // Knowing a helper's email proves nothing, and this step replaces their password.
+    const upgrade = byMobile && !this.nonHelper(byMobile) && (!byEmail || byEmail.id === byMobile.id) ? byMobile : null;
     if (byEmail && byEmail.id !== upgrade?.id) fail('This email already has an account. Log in or use another email.', 409);
+    if (upgrade && upgrade.status !== 'active') fail('This login is disabled. Ask the admin to enable it.', 403);
 
     const passwordHash = await hashPassword(b.password);
     const hint = pwHintFields(b.password);
@@ -195,7 +197,8 @@ export class AuthController {
     if (!u) fail('No account uses this email. Check the spelling.', 404);
     const authCfg: any = (await this.prisma.platformDoc.findUnique({ where: { key: 'authCfg' } }))?.data ?? {};
     const d: any = u!.data;
-    return { email: u!.email, ...(authCfg.hint !== false ? { pwHint: d.pwHint, pwLen: d.pwLen } : {}) };
+    // staff logins reach every customer, so they never show a hint
+    return { email: u!.email, ...(authCfg.hint !== false && u!.role !== 'platform' ? { pwHint: d.pwHint, pwLen: d.pwLen } : {}) };
   }
 
   @UseGuards(ThrottlerGuard)
@@ -276,7 +279,10 @@ export class AuthController {
   @Post('people/find')
   @HttpCode(200)
   async findPerson(@Req() req: AuthedRequest, @Body() body: unknown) {
-    if (req.scope.kind === 'anon') fail('Please log in again.', 401);
+    const s = req.scope;
+    if (s.kind === 'anon') fail('Please log in again.', 401);
+    // only people who add helpers need this
+    if (s.kind === 'tenant' && !s.ownerOf.length && !Object.values(s.helperOn).some((h) => h.role === 'manager')) fail('Only the owner or an Event Admin can add helpers.', 403);
     const b = parse(z.object({ email: z.string().max(200).optional(), mobile: z.string().max(20).optional() }), body);
     const email = b.email?.trim().toLowerCase();
     const mobile = b.mobile ? normMob(b.mobile) : undefined;

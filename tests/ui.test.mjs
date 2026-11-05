@@ -28,7 +28,7 @@ const go = (d, hash) => d.p.evaluate((h) => { location.hash = h; }, hash);
 const settle = (d, ms = 400) => d.p.waitForTimeout(ms);
 
 async function login(d, [email, pw]) {
-  await d.p.goto(`${BASE}/#login`, { waitUntil: 'load' });
+  await d.p.goto(`${BASE}/#login`, { waitUntil: 'domcontentloaded' });
   await d.p.waitForSelector('#l_user');
   await d.p.fill('#l_user', email);
   await d.p.fill('#l_pw', pw);
@@ -55,7 +55,7 @@ async function receiveMoi(d, eventId, name, amount, mob = '') {
 async function signup(d, name) {
   const mob = mobile();
   const email = `${uniq('ui')}@example.com`;
-  await d.p.goto(`${BASE}/#signup`, { waitUntil: 'load' });
+  await d.p.goto(`${BASE}/#signup`, { waitUntil: 'domcontentloaded' });
   await d.p.waitForSelector('#o_mobile');
   await d.p.fill('#o_mobile', mob);
   await d.p.click('form[data-form=otpSend] button.btn-primary');
@@ -92,13 +92,23 @@ async function createEvent(d, name) {
     await d.p.locator('form.ewz [data-act=ewNext]').first().click();
     await settle(d, 300);
   }
-  await d.p.waitForFunction((n) => (0, eval)(`S.events.some(e=>e.name===${JSON.stringify(n)})`), name);
+  await synced(d, `S.events.some(e=>e.name===${JSON.stringify(name)})`);
   await settle(d, 900);
   await d.S('closeModal()');
   return d.S(`S.events.find(e=>e.name===${JSON.stringify(name)}).id`);
 }
 
-const synced = (d, expr, ms = 8000) => d.p.waitForFunction((x) => !!(0, eval)(x), expr, { timeout: ms });
+/** Waits until something is true in the app. It asks from out here, because the page's own rules forbid eval inside it. */
+async function synced(d, expr, ms = 8000) {
+  const end = Date.now() + ms;
+  for (;;) {
+    try {
+      if (await d.S(`!!(${expr})`)) return;
+    } catch { /* the page is still loading */ }
+    if (Date.now() > end) assert.fail(`timed out waiting for: ${expr}`);
+    await new Promise((r) => setTimeout(r, 100));
+  }
+}
 
 describe('a family using the app', () => {
   test('a new customer signs up, creates a function and takes a Moi', async () => {
@@ -136,7 +146,7 @@ describe('a family using the app', () => {
     const d = await device();
     await login(d, OWNER);
     const before = await d.S('S.moi.length');
-    await d.p.reload({ waitUntil: 'load' });
+    await d.p.reload({ waitUntil: 'domcontentloaded' });
     await synced(d, 'MPS.ready&&me');
     assert.equal(await d.S('me.email'), OWNER[0]);
     assert.equal(await d.S('S.moi.length'), before);
@@ -147,7 +157,7 @@ describe('a family using the app', () => {
     const d = await device();
     await login(d, OWNER);
     await d.S('ACT.logout()');
-    await d.p.waitForFunction(() => !(0, eval)('me') && (0, eval)('MPS.ready'), null, { timeout: 8000 });
+    await synced(d, '!me&&MPS.ready');
     await settle(d, 500);
     const kept = await d.p.evaluate(() => localStorage.getItem('moipoint-v7') || '');
     assert.ok(!kept.includes('ramesh.kumar@gmail.com'), 'account data stayed on the phone');
@@ -157,7 +167,7 @@ describe('a family using the app', () => {
 
   test('wrong password shows the message on the form', async () => {
     const d = await device();
-    await d.p.goto(`${BASE}/#login`, { waitUntil: 'load' });
+    await d.p.goto(`${BASE}/#login`, { waitUntil: 'domcontentloaded' });
     await d.p.waitForSelector('#l_user');
     await d.p.fill('#l_user', OWNER[0]);
     await d.p.fill('#l_pw', 'wrong-password');
@@ -192,7 +202,7 @@ describe('forgot password', () => {
     const { email, mob } = await signup(a, 'Forgetful');
     await a.close();
     const d = await device();
-    await d.p.goto(`${BASE}/#forgot`, { waitUntil: 'load' });
+    await d.p.goto(`${BASE}/#forgot`, { waitUntil: 'domcontentloaded' });
     await d.p.waitForSelector('#fp_email');
     await d.p.fill('#fp_email', email);
     await d.p.click('form[data-form=fpFind] button');
@@ -220,7 +230,7 @@ describe('forgot password', () => {
 
 describe('guest QR page', () => {
   async function guestEntry(g, name, mob, amount = 501) {
-    await g.p.goto(`${BASE}/#EV003`, { waitUntil: 'load' });
+    await g.p.goto(`${BASE}/#EV003`, { waitUntil: 'domcontentloaded' });
     await g.p.waitForSelector('form[data-form=pub]');
     await g.p.locator('[data-act=mode]', { hasText: 'Cash' }).click();
     await settle(g, 200);
@@ -253,7 +263,7 @@ describe('guest QR page', () => {
 
   test('a stranger’s phone gets nothing but the event', async () => {
     const g = await device();
-    await g.p.goto(`${BASE}/#EV003`, { waitUntil: 'load' });
+    await g.p.goto(`${BASE}/#EV003`, { waitUntil: 'domcontentloaded' });
     await g.p.waitForSelector('form[data-form=pub]');
     assert.equal(await g.S('S.users.length'), 0);
     assert.equal(await g.S('S.moi.length'), 0);
@@ -266,7 +276,7 @@ describe('guest QR page', () => {
     await o.login(...OWNER);
     const m = o.state.state.moi.find((x) => x.c.mobile);
     const d = await device();
-    await d.p.goto(`${BASE}/r/${m.code}`, { waitUntil: 'load' });
+    await d.p.goto(`${BASE}/r/${m.code}`, { waitUntil: 'domcontentloaded' });
     await d.p.waitForFunction(() => /Genuine receipt|Pending|receipt/i.test(document.body.innerText), null, { timeout: 8000 });
     const text = await d.p.evaluate(() => document.body.innerText);
     assert.ok(text.includes(m.code));
@@ -290,6 +300,7 @@ describe('working with no internet', () => {
     await settle(laptop, 1500);
     assert.equal(await laptop.S(`S.moi.some(m=>m.c.name===${JSON.stringify(name)})`), false);
     await phone.ctx.setOffline(false);
+    await synced(phone, 'navigator.onLine');
     await phone.p.evaluate(() => window.dispatchEvent(new Event('online')));
     await synced(laptop, `S.moi.some(m=>m.c.name===${JSON.stringify(name)})`, 15000);
     await settle(laptop, 2000);
@@ -313,7 +324,7 @@ describe('working with no internet', () => {
     await receiveMoi(phone, 'e2', name, 3001);
     await settle(phone, 300);
     await phone.ctx.setOffline(false);
-    await phone.p.reload({ waitUntil: 'load' });
+    await phone.p.reload({ waitUntil: 'domcontentloaded' });
     await synced(phone, 'MPS.ready&&me', 10000);
     await settle(phone, 1500);
     const o = new Device();
@@ -427,11 +438,11 @@ describe('Moi Point staff', () => {
     const d = await device(LAPTOP);
     await login(d, ['master@moipoint.in', 'master123']);
     await d.S(`mpImpersonate(S.users.find(u=>u.id==='u1'))`);
-    await d.p.waitForFunction(() => (0, eval)(`me&&me.id==='u1'`));
+    await synced(d, `me&&me.id==='u1'`);
     await settle(d, 500);
     assert.ok((await d.p.evaluate(() => document.body.innerText)).includes('Support view'));
     await d.S('ACT.impExit()');
-    await d.p.waitForFunction(() => (0, eval)(`me&&me.id==='p1'`));
+    await synced(d, `me&&me.id==='p1'`);
     await d.close();
   });
 
@@ -471,7 +482,7 @@ describe('every screen still opens', () => {
 
   test('website pages open for a visitor', async () => {
     const d = await device();
-    await d.p.goto(`${BASE}/`, { waitUntil: 'load' });
+    await d.p.goto(`${BASE}/`, { waitUntil: 'domcontentloaded' });
     await settle(d, 800);
     for (const h of ['how', 'contact', 'blog', 'login', 'signup', 'forgot']) {
       await go(d, h);
@@ -485,7 +496,7 @@ describe('every screen still opens', () => {
     const d = await device();
     await login(d, OWNER);
     await d.p.evaluate(() => { localStorage.setItem('moipoint-uilang', 'ta'); });
-    await d.p.reload({ waitUntil: 'load' });
+    await d.p.reload({ waitUntil: 'domcontentloaded' });
     await synced(d, 'MPS.ready&&me&&document.body.innerText.length>200');
     await settle(d, 500);
     const text = await d.p.evaluate(() => document.body.innerText);
@@ -534,7 +545,7 @@ describe('all 17 automation triggers, through the real screens', () => {
   /** A guest on their own phone: scans the QR, picks how to pay, and confirms by OTP. */
   async function guest(mode, name, mob) {
     const g = await device();
-    await g.p.goto(`${BASE}/#EV003`, { waitUntil: 'load' });
+    await g.p.goto(`${BASE}/#EV003`, { waitUntil: 'domcontentloaded' });
     await g.p.waitForSelector('form[data-form=pub]');
     await g.p.locator(`[data-act=mode][data-mode=${mode}]`).click();
     await settle(g, 200);
@@ -562,6 +573,14 @@ describe('all 17 automation triggers, through the real screens', () => {
     await settle(o);
     await o.S('render()');
     await o.p.locator(`[data-act=${act}][data-id="${id}"]`).first().click();
+  }
+
+  /** A reminder that falls due rings on screen until someone closes it. */
+  async function closeAlarms() {
+    for (let i = 0; i < 5 && (await o.p.locator('[data-act=ringClose]').count()); i++) {
+      await o.p.locator('[data-act=ringClose]').first().click();
+      await settle(o, 150);
+    }
   }
 
   const customerPaid = (hits, quote) => {
@@ -678,6 +697,7 @@ describe('all 17 automation triggers, through the real screens', () => {
   });
 
   test('C11: an owner sends an invitation', async () => {
+    await closeAlarms();
     await o.S(`msgOpen({aud:'ev',ev:'e1',kind:'invite'})`);
     await o.p.waitForSelector('form[data-form=invite]');
     await settle(o, 300);
@@ -693,6 +713,7 @@ describe('all 17 automation triggers, through the real screens', () => {
   test('M4: the Moi Book PDF is sent, and the link opens a real PDF', async () => {
     await go(o, 'ev-e1-overview');
     await settle(o, 600);
+    await closeAlarms();
     await o.p.locator('[data-act=bookAgain][data-id=e1]').first().click();
     const hits = await fired('M4', () => true, 40000);
     const wa = hits.find((m) => m.channel === 'WhatsApp');
@@ -714,7 +735,7 @@ describe('all 17 automation triggers, through the real screens', () => {
 
   test('M2: a user asks for a password reset code', async () => {
     const d = await device();
-    await d.p.goto(`${BASE}/#forgot`, { waitUntil: 'load' });
+    await d.p.goto(`${BASE}/#forgot`, { waitUntil: 'domcontentloaded' });
     await d.p.waitForSelector('#fp_email');
     await d.p.fill('#fp_email', fresh.email);
     await d.p.click('form[data-form=fpFind] button');
@@ -732,7 +753,7 @@ describe('all 17 automation triggers, through the real screens', () => {
     const mob = mobile();
     const name = uniq('Lead ');
     const d = await device();
-    await d.p.goto(`${BASE}/`, { waitUntil: 'load' });
+    await d.p.goto(`${BASE}/`, { waitUntil: 'domcontentloaded' });
     await settle(d, 600);
     await d.S(`lLeadModal('enquiry')`);
     await d.p.waitForSelector('#ll_name');
@@ -765,5 +786,161 @@ describe('all 17 automation triggers, through the real screens', () => {
     assert.equal(hits[0].paidBy, 'platform');
     assert.ok(hits.some((m) => m.to === OWNER_MOBILE));
     await s.close();
+  });
+});
+
+describe('the printed QR code', () => {
+  test('scanning it opens the function’s Moi form, not the home page', async () => {
+    for (const path of ['EV003', 'ev003', 'EV-003']) {
+      const d = await device();
+      await d.p.goto(`${BASE}/${path}`, { waitUntil: 'domcontentloaded' });
+      await d.p.waitForSelector('form[data-form=pub]');
+      assert.deepEqual(d.errors, []);
+      await d.close();
+    }
+  });
+
+  test('the secret event link works the same way', async () => {
+    const token = await (async () => {
+      const o = new Device();
+      await o.login(...OWNER);
+      return o.state.state.events.find((e) => e.id === 'e2').token;
+    })();
+    const d = await device();
+    await d.p.goto(`${BASE}/${token}`, { waitUntil: 'domcontentloaded' });
+    await d.p.waitForSelector('form[data-form=pub]');
+    await d.close();
+  });
+
+  test('the QR on screen points at this server, so a phone can open it', async () => {
+    const d = await device(LAPTOP);
+    await login(d, OWNER);
+    await go(d, 'ev-e2-qr');
+    await d.p.waitForSelector('[data-qr]');
+    const url = await d.p.locator('.qr-box.big').getAttribute('data-qr');
+    assert.match(url, /^https?:\/\/.+\/EV003$/);
+    assert.ok(!url.includes('moipoint.in'), url);
+    await d.p.waitForFunction(() => document.querySelector('.qr-box.big canvas, .qr-box.big img'));
+    await d.close();
+  });
+
+  test('Give Moi on the invitation page scrolls to the form, with the page’s script rules on', async () => {
+    const d = await device();
+    await d.p.goto(`${BASE}/EV003`, { waitUntil: 'domcontentloaded' });
+    await d.p.waitForSelector('form[data-form=pub]');
+    const give = d.p.locator('[data-act=c3pay]');
+    if (await give.count()) {
+      await give.first().click();
+      await settle(d, 500);
+      assert.equal(new URL(d.p.url()).hash, '#EV003', 'the address stays on the event');
+    }
+    assert.deepEqual(d.errors, []);
+    await d.close();
+  });
+});
+
+describe('a weak network at the venue', () => {
+  /** Makes an entry offline, then brings the phone back. */
+  async function offlineEntry(phone, name, whileOffline = async () => {}) {
+    await login(phone, ['divya.sankar@gmail.com', 'divya123']);
+    await settle(phone, 1000);
+    await phone.ctx.setOffline(true);
+    await phone.p.evaluate(() => window.dispatchEvent(new Event('offline')));
+    await receiveMoi(phone, 'e2', name, 3001);
+    await settle(phone, 300);
+    await whileOffline();
+    await phone.ctx.setOffline(false);
+    await synced(phone, 'navigator.onLine');
+  }
+  const onServer = async (name) => {
+    const o = new Device();
+    await o.login(...OWNER);
+    return o.state.state.moi.filter((m) => m.c.name === name).length;
+  };
+
+  test('an entry is not lost when the first send after reopening fails', async () => {
+    const phone = await device();
+    const name = uniq('Weak Signal ');
+    let refused = 0;
+    await offlineEntry(phone, name, () => phone.p.route('**/api/sync', (r) => { refused++; return r.abort(); }));
+    await phone.p.reload({ waitUntil: 'domcontentloaded' });
+    await synced(phone, 'MPS.ready&&me', 15000);
+    await settle(phone, 500);
+    assert.ok(refused >= 1, 'the send must have been tried');
+    assert.equal(await phone.S(`S.moi.filter(m=>m.c.name===${JSON.stringify(name)}).length`), 1, 'the entry must stay on the phone');
+    await phone.p.unroute('**/api/sync');
+    await phone.S('mpSoon()');
+    const end = Date.now() + 20000;
+    while (Date.now() < end && !(await onServer(name))) await settle(phone, 500);
+    assert.equal(await onServer(name), 1, 'the entry must reach the server once, when the network returns');
+    await phone.close();
+  });
+
+  test('an entry is not lost when a full refresh arrives before it is sent', async () => {
+    const phone = await device();
+    const name = uniq('Refresh Race ');
+    await login(phone, ['divya.sankar@gmail.com', 'divya123']);
+    await settle(phone, 1000);
+    await phone.p.route('**/api/sync', (r) => r.abort());
+    await receiveMoi(phone, 'e2', name, 3001);
+    await settle(phone, 300);
+    await phone.S('mpReloadState()');
+    await settle(phone, 800);
+    assert.equal(await phone.S(`S.moi.filter(m=>m.c.name===${JSON.stringify(name)}).length`), 1, 'a refresh must not wipe unsent work');
+    await phone.p.unroute('**/api/sync');
+    await phone.S('mpSoon()');
+    const end = Date.now() + 20000;
+    while (Date.now() < end && !(await onServer(name))) await settle(phone, 500);
+    assert.equal(await onServer(name), 1);
+    await phone.close();
+  });
+
+  test('an entry is not lost when the login runs out while offline', async () => {
+    const phone = await device();
+    const name = uniq('Expired Login ');
+    await offlineEntry(phone, name, () => phone.p.route('**/api/sync', (r) => r.fulfill({ status: 401, contentType: 'application/json', body: '{"error":"Please log in again."}' })));
+    await phone.S('mpSoon()');
+    await phone.p.waitForFunction(() => location.hash === '#login');
+    await phone.p.unroute('**/api/sync');
+    await phone.p.waitForSelector('#l_user');
+    await phone.p.fill('#l_user', 'divya.sankar@gmail.com');
+    await phone.p.fill('#l_pw', 'divya123');
+    await phone.p.click('form[data-form=login] button.btn-primary');
+    await phone.p.waitForFunction(() => /dashboard/.test(location.hash));
+    const end = Date.now() + 20000;
+    while (Date.now() < end && !(await onServer(name))) await settle(phone, 500);
+    assert.equal(await onServer(name), 1, 'logging back in must send what was waiting');
+    await phone.close();
+  });
+
+  test('logging out offline waits, so a shared phone never loses an entry', async () => {
+    const phone = await device();
+    const name = uniq('Logout Offline ');
+    await login(phone, ['divya.sankar@gmail.com', 'divya123']);
+    await settle(phone, 1000);
+    await phone.ctx.setOffline(true);
+    await phone.p.evaluate(() => window.dispatchEvent(new Event('offline')));
+    await receiveMoi(phone, 'e2', name, 3001);
+    await phone.S('ACT.logout()');
+    await settle(phone, 500);
+    assert.ok(await phone.S('!!me'), 'it must stay logged in');
+    assert.equal(await phone.S(`S.moi.filter(m=>m.c.name===${JSON.stringify(name)}).length`), 1);
+    await phone.ctx.setOffline(false);
+    await synced(phone, 'navigator.onLine');
+    await phone.S('mpSoon()');
+    const end = Date.now() + 15000;
+    while (Date.now() < end && !(await onServer(name))) await settle(phone, 500);
+    assert.equal(await onServer(name), 1);
+    await phone.close();
+  });
+
+  test('a slow font server never holds up the page', async () => {
+    const d = await device();
+    await d.p.route(/fonts\.(googleapis|gstatic)\.com/, () => { /* never answers */ });
+    const t = Date.now();
+    await d.p.goto(`${BASE}/#login`, { waitUntil: 'commit' });
+    await d.p.waitForSelector('#l_user', { state: 'visible', timeout: 6000 });
+    assert.ok(Date.now() - t < 6000);
+    await d.close();
   });
 });

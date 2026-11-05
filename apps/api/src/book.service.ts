@@ -9,6 +9,7 @@ import { StreamService } from './stream.service';
 import { fmt, randomToken, uid } from './util';
 
 const OK_STATUS = ['received', 'verified'];
+const BOOK_MESSAGES_PER_DAY = 20;
 const CHROME_PATHS = [
   'C:/Program Files/Google/Chrome/Application/chrome.exe',
   'C:/Program Files (x86)/Google/Chrome/Application/chrome.exe',
@@ -25,6 +26,7 @@ export class BookService {
   private log = new Logger('MoiBook');
   /** One-time passes that let the PDF browser read a single event for a minute. */
   private passes = new Map<string, { eventId: string; exp: number }>();
+  private line: Promise<unknown> = Promise.resolve();
 
   constructor(private prisma: PrismaService, private messages: MessagesService, private stream: StreamService, private storage: StorageService) {}
 
@@ -49,6 +51,8 @@ export class BookService {
     const browser = await chromium.launch({ executablePath, headless: true, args: ['--no-sandbox'] });
     try {
       const page = await browser.newPage();
+      // this browser runs inside the server, so it reaches only the app itself and its fonts
+      await page.route('**/*', (r) => (/^(data:|blob:|https:\/\/fonts\.(googleapis|gstatic)\.com\/)/.test(r.request().url()) || r.request().url().startsWith(`http://127.0.0.1:${cfg.port}/`) ? r.continue() : r.abort()));
       await page.goto(`http://127.0.0.1:${cfg.port}/?render=${encodeURIComponent(token)}`, { waitUntil: 'load', timeout: 30000 });
       await page.waitForFunction(() => (globalThis as any).__bookReady === true, null, { timeout: 30000 });
       const orientation = await page.evaluate(() => (globalThis as any).__bookOrient);
@@ -71,7 +75,21 @@ export class BookService {
     return at.getTime();
   }
 
-  async send(ev: any, again = false): Promise<boolean> {
+  /** The Moi Book goes to an address the family typed and Moi Point pays for it, so each account has a daily limit. */
+  async overLimit(accountId: string) {
+    const sent = await this.prisma.message.count({ where: { trigger: 'M4', accountId, createdAt: { gte: new Date(Date.now() - 864e5) } } });
+    return sent >= BOOK_MESSAGES_PER_DAY;
+  }
+
+  /** One at a time, so a burst of requests can't start a crowd of browsers or slip past the limit. */
+  send(ev: any, again = false): Promise<boolean> {
+    const run = this.line.then(() => this.sendNow(ev, again));
+    this.line = run.catch(() => false);
+    return run;
+  }
+
+  private async sendNow(ev: any, again: boolean): Promise<boolean> {
+    if (await this.overLimit(ev.accountId)) return false;
     const d: any = ev.data;
     const account = await this.prisma.account.findUnique({ where: { id: ev.accountId } });
     const owner = account?.ownerId ? await this.prisma.user.findUnique({ where: { id: account.ownerId } }) : null;

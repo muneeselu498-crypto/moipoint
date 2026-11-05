@@ -223,7 +223,7 @@ function assignModal(ev){
 }
 
 /* ---------- QR ---------- */
-const payUrl=ev=>`https://moipoint.in/${ev.no||ev.token}`;
+const payUrl=ev=>`${window.MP_BASE||'https://moipoint.in'}/${ev.no||ev.token}`;
 function vQR(ev){
   return `<div class="page-head"><div><h1>Event QR Code</h1><p class="sub">Print it for the Moi counter or share it on the invitation. Guests scan to open this event’s payment page.</p></div></div>
   <div class="split"><section class="card pad center">${evLogo(ev)}<h2>${esc(ev.name)}</h2><p class="muted">${dfmt(ev.date)} · ${esc(ev.venue)}</p>

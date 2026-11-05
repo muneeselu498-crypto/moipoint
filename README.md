@@ -43,7 +43,7 @@ To start over with clean demo data, stop the app and run `npm run reset`.
 
 ## What is real and what is simulated
 
-Real now: logins, sessions, password hashing, OTP checking, credits and prices, receipt numbers, live sync between devices, offline entries, reminders and Moi Book on a timer, the Moi Book PDF, and file storage on disk.
+Real now: logins, sessions, password hashing, OTP checking, credits and prices, receipt numbers, live sync between devices, offline entries that survive a failed send, reminders and Moi Book on a timer, the Moi Book PDF, and file storage on disk.
 
 Simulated until the client's accounts are connected:
 
@@ -76,7 +76,7 @@ Status can be `delivered`, `read` or `failed`. Photos arrive in `media.image` an
 
 If the webhook is down or takes over 15 seconds to answer, the server tries again every 30 seconds for 10 minutes, then marks the message failed. A retry keeps the same `id`, so use it to ignore repeats. A direct WhatsApp or SMS provider can also be added as another class in `messages.service.ts`.
 
-**Before a real launch**, set `DEV_TOOLS=0` and `SEED_DEMO=0`. That turns off the Dev Outbox, stops OTP codes appearing on screen, and hides the demo logins and online payment. Use https, and set `PUBLIC_URL` to the https address so cookies are secure.
+**Before a real launch**, set `DEV_TOOLS=0` and `SEED_DEMO=0`. That turns off the Dev Outbox, stops OTP codes appearing on screen, and hides the demo logins and online payment. Use https, and set `PUBLIC_URL` to the https address so cookies are secure. If nginx or another proxy sits in front, set `TRUST_PROXY=1`.
 
 The Moi Book PDF needs Chrome or Edge on the server. Set `CHROME_PATH` if it isn't in the usual place.
 
@@ -118,6 +118,9 @@ They run on a throwaway database, so your data is safe. The browser tests use th
 
 - Receipt numbers are sequential, so someone could walk through the public receipt check pages. Mobile numbers are masked there, but names and amounts show. A random link in the QR would close this.
 - A device receives its whole account history at login. This is fine for family accounts, but Master Admin will need paging once there are many customers.
+- The password hint on Forgot password shows the first and last two characters to anyone who knows the customer's email. It was agreed on the call, so it stays until Munees decides. Staff logins never show it, and Master Admin can switch it off for everyone.
+- Changing your email or mobile in Profile isn't confirmed by a code.
+- Staff roles are enforced for changes. Reading is not limited by role yet, so every staff login can read all customer data through the server, even where the screens hide it.
 - Two people editing the same record at the same moment: the last save wins. Receipt numbers and credits are protected from this.
 - Live updates and message retries assume one server process. Running several needs a shared message channel.
 - A message that fails after every retry keeps its credit. Refunding it is an open decision in the automation report.

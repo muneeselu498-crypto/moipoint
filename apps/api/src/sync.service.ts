@@ -2,11 +2,13 @@ import { HttpException, Injectable, Logger } from '@nestjs/common';
 import { MODEL, PLATFORM_ARRAYS, PUBLIC_DOCS, PUSH_ORDER, STATE_FLAGS, TENANT_DOCS, type Col } from './collections';
 import { cfg } from './config';
 import { MessagesService } from './messages.service';
+import { mergePerson, personFor, personForStaff } from './people';
 import { PrismaService, Tx } from './prisma.service';
 import { Scope, ScopeService } from './scope.service';
+import { mayWriteDoc, StaffRole, staffRole } from './staff';
 import { StorageService } from './storage.service';
 import { StreamService } from './stream.service';
-import { fail, hashPassword, mobOk, pwHintFields, pwOk } from './util';
+import { fail, hashPassword, mobOk, pwHintFields, pwOk, uid } from './util';
 import { addCredits, spendCredit, walletSync } from './wallet';
 
 interface Ctx {
@@ -21,6 +23,8 @@ interface Ctx {
   pricing: any;
   validDays: number;
   scopeChanged: boolean;
+  /** Set when Moi Point staff are saving, with what their role allows. */
+  staff: StaffRole | null;
 }
 interface Outcome {
   col: string;
@@ -31,6 +35,32 @@ interface Outcome {
 }
 
 const DOC_NEVER_FROM_BROWSER = new Set(['platLog', 'resets']);
+
+/** Ids end up in the page's markup, so they can't hold anything that would break out of it. */
+const SAFE_ID = /^[\w.:@+-]{1,100}$/;
+const MOI_STATUS = new Set(['received', 'verified', 'pending', 'tocollect', 'void', 'rejected']);
+const MOI_MODE = new Set(['cash', 'upi', 'online', 'item']);
+const EVENT_STATUS = new Set(['draft', 'active', 'completed', 'archived', 'void']);
+/** Staff with a read-only role can't change a customer's records. */
+const NEEDS_EDIT_ROLE = new Set<Col>(['accounts', 'events', 'eventUsers', 'moi', 'expenses', 'payouts', 'guests', 'ggroups']);
+/** Messages a device may ask for. Every other trigger is decided by the server. */
+const DEVICE_TRIGGERS = new Set(['C1', 'C2', 'C3', 'C4', 'C9', 'C11']);
+/** A phone offline can run ahead a little. A number far ahead would use up the event's receipt numbers. */
+const RECEIPT_AHEAD = 10000;
+/** Free credits cost real money once messages are live, so each account gets them for this many new events a month. */
+const FREE_EVENTS_PER_MONTH = 5;
+const CALENDAR_INVITES_PER_DAY = 20;
+const DAY = 864e5;
+
+/** The database keeps keys in its own order, so records are compared by what they hold. */
+const canon = (v: any): string =>
+  JSON.stringify(v ?? null, (_k, x) => (x && typeof x === 'object' && !Array.isArray(x) ? Object.fromEntries(Object.entries(x).sort(([a], [b]) => (a < b ? -1 : 1))) : x));
+
+/** The event's secret link. A chosen one that looks like an event number could shadow a real function's QR. */
+const eventToken = (t: unknown) => {
+  const v = String(t ?? '');
+  return /^[a-z0-9]{6,40}$/.test(v) && !/^ev\d+$/.test(v) ? v : uid('t');
+};
 
 type PushBody = { upserts: any[]; deletes: any[]; people?: Record<string, any>; platform?: Record<string, any>; pw?: Record<string, string> };
 
@@ -83,6 +113,12 @@ export class SyncService {
     if (s.kind === 'anon') return null;
     const ev = { in: s.eventIds };
     const acc = { in: s.accountIds };
+    const helping = Object.entries(s.helperOn).filter(([, h]) => !s.ownerOf.includes(h.accountId));
+    /** Events where this person holds at least one of these permissions. */
+    const eventsWith = (...perms: string[]) => {
+      const without = helping.filter(([, h]) => !perms.some((p) => h.perm[p])).map(([id]) => id);
+      return s.eventIds.filter((id) => !without.includes(id));
+    };
     switch (col) {
       case 'users': {
         const links = await this.prisma.eventUser.findMany({ where: { eventId: ev, deleted: false }, select: { userId: true } });
@@ -92,8 +128,17 @@ export class SyncService {
       }
       case 'accounts': return { id: acc };
       case 'events': return { id: ev };
-      case 'eventUsers': case 'moi': case 'expenses': case 'payouts': return { eventId: ev };
-      case 'guests': case 'ggroups': return { accountId: acc };
+      case 'eventUsers': return { eventId: ev };
+      case 'moi': {
+        // without the list permission, a helper sees their own entries and what is waiting at the counter
+        const open = eventsWith('list');
+        const limited = s.eventIds.filter((id) => !open.includes(id));
+        if (!limited.length) return { eventId: ev };
+        return { OR: [{ eventId: { in: open } }, { eventId: { in: limited }, OR: [{ status: { in: ['tocollect', 'pending'] } }, { data: { path: ['collected_by'], equals: s.userId } }] }] };
+      }
+      case 'expenses': return { eventId: { in: eventsWith('exp', 'rep', 'pay') } };
+      case 'payouts': return { eventId: { in: eventsWith('pay', 'rep') } };
+      case 'guests': case 'ggroups': return { accountId: { in: s.liveAccountIds } };
       case 'reminders': return s.userId ? { ownerId: s.userId } : null;
       case 'notifications': return { OR: [{ eventId: ev }, ...(s.userId ? [{ ownerId: s.userId }] : [])] };
       case 'msgLog': {
@@ -133,10 +178,18 @@ export class SyncService {
     }
     // the app shows newest messages first
     state.msgLog.sort((a: any, b: any) => (b.at || 0) - (a.at || 0));
-    const people = s.kind === 'anon' ? [] : await this.prisma.person.findMany({ where: { deleted: false, ...(s.kind === 'tenant' ? { accounts: { hasSome: s.accountIds } } : {}) } });
-    for (const p of people) state.people[p.mobile] = p.data;
+    for (const p of await this.peopleFor(s, { deleted: false })) state.people[p.mobile] = this.personOut(p, s);
     state.platform = platform;
     return { rev, scope: s.key, state };
+  }
+
+  /** Guests are private: a visitor gets none, and a family gets only its own. */
+  private peopleFor(s: Scope, where: any) {
+    if (s.kind === 'anon') return Promise.resolve([]);
+    return this.prisma.person.findMany({ where: { ...where, ...(s.kind === 'tenant' ? { accounts: { hasSome: s.liveAccountIds } } : {}) } });
+  }
+  private personOut(p: any, s: Scope) {
+    return s.kind === 'platform' ? personForStaff(p) : personFor(p, s.liveAccountIds);
   }
 
   /** Only what changed since the number this device last saw. */
@@ -153,12 +206,12 @@ export class SyncService {
     }
     const keys = this.docKeys(s);
     const docs = (await this.prisma.platformDoc.findMany({ where: { ...gt, ...(keys ? { key: { in: keys } } : {}) } })).filter((d) => !d.key.startsWith('_'));
-    const people = await this.prisma.person.findMany({ where: { ...gt, ...(s.kind === 'tenant' ? { accounts: { hasSome: s.accountIds } } : {}) } });
+    const people = await this.peopleFor(s, gt);
     return {
       rev,
       changes: out,
       docs: Object.fromEntries(docs.map((d) => [d.key, d.data])),
-      people: Object.fromEntries(people.map((p) => [p.mobile, p.data])),
+      people: Object.fromEntries(people.map((p) => [p.mobile, this.personOut(p, s)])),
     };
   }
 
@@ -185,7 +238,7 @@ export class SyncService {
       } catch (e: any) {
         this.log.error(`Rejected ${col}/${id}: ${e.message}`);
         const row = col && MODEL[col as Col] ? await (this.prisma as any)[MODEL[col as Col]].findUnique({ where: { id } }) : null;
-        results.push(this.no(col as Col, id, 'This change could not be saved.', row, scope));
+        results.push(await this.no(col as Col, id, 'This change could not be saved.', row, scope));
       }
     };
     for (const u of body.upserts) await single({ upserts: [u], deletes: [] }, u.col, u.id);
@@ -196,11 +249,12 @@ export class SyncService {
 
   private async pushBatch(scope: Scope, body: PushBody) {
     const results: Outcome[] = [];
+    const staff = await staffRole(this.prisma, scope);
     const ctx = await this.prisma.$transaction(
       async (tx) => {
         const rev = await this.messages.bump(tx);
         const pricing: any = (await tx.platformDoc.findUnique({ where: { key: 'pricing' } }))?.data ?? {};
-        const c: Ctx = { scope, rev, touched: new Set(), codeMap: new Map(), evNoMap: new Map(), messages: [], pricing, validDays: +pricing.validDays || 365, scopeChanged: false };
+        const c: Ctx = { scope, rev, touched: new Set(), codeMap: new Map(), evNoMap: new Map(), messages: [], pricing, validDays: +pricing.validDays || 365, scopeChanged: false, staff };
         for (const col of PUSH_ORDER) {
           for (const ch of body.upserts.filter((u) => u.col === col)) results.push(await this.upsert(tx, c, col, String(ch.id), this.storage.externalize(ch.data)));
           for (const ch of body.deletes.filter((u) => u.col === col)) results.push(await this.remove(tx, c, col, String(ch.id)));
@@ -219,8 +273,16 @@ export class SyncService {
     return { rev: Number(ctx.rev), scope: scopeKey, results };
   }
 
-  private no(col: Col, id: string, reason: string, row: any, s: Scope): Outcome {
-    return { col, id, ok: false, reason, data: row && !row.deleted ? this.toClient(col, row, s) : null };
+  /** Could this person read this record anyway? */
+  private async canSee(col: Col, id: string, s: Scope) {
+    const where = await this.whereFor(col, s);
+    return !!where && !!(await (this.prisma as any)[MODEL[col]].findFirst({ where: { AND: [where, { id }] }, select: { id: true } }));
+  }
+
+  /** A refusal returns the saved copy so the device can undo its change, but only to someone already allowed to read it. */
+  private async no(col: Col, id: string, reason: string, row: any, s: Scope): Promise<Outcome> {
+    const seen = !!row && !row.deleted && (await this.canSee(col, id, s));
+    return { col, id, ok: false, reason, data: seen ? this.toClient(col, row, s) : null };
   }
   private yes(col: Col, id: string, row: any, s: Scope): Outcome {
     return { col, id, ok: true, data: this.toClient(col, row, s) };
@@ -237,6 +299,10 @@ export class SyncService {
   }
 
   private async upsert(tx: Tx, c: Ctx, col: Col, id: string, d: any): Promise<Outcome> {
+    if (!SAFE_ID.test(id) || !d || typeof d !== 'object') return { col, id, ok: false, reason: 'This change could not be saved.', data: null };
+    if (c.staff && !c.staff.edit && NEEDS_EDIT_ROLE.has(col)) {
+      return this.no(col, id, 'Your role can’t change this.', await (tx as any)[MODEL[col]].findUnique({ where: { id } }), c.scope);
+    }
     switch (col) {
       case 'users': return this.upUser(tx, c, id, d);
       case 'accounts': return this.upAccount(tx, c, id, d);
@@ -277,8 +343,8 @@ export class SyncService {
       status = 'active';
       accountId = d.acc ?? null;
       platformRole = d.prole ?? null;
-      if (role === 'platform' ? !plat : !['manager', 'collector'].includes(role)) return this.no('users', id, 'This login can’t be created.', null, s);
-      if (role !== 'platform' && !this.isOwner(s, accountId) && !(accountId && this.managerIn(s, accountId))) return this.no('users', id, 'Only the owner can add logins.', null, s);
+      if (role === 'platform' ? !c.staff?.owner : !['manager', 'collector'].includes(role)) return this.no('users', id, 'This login can’t be created.', null, s);
+      if (role !== 'platform' && !(plat ? c.staff!.edit : this.isOwner(s, accountId) || (accountId && this.managerIn(s, accountId)))) return this.no('users', id, 'Only the owner can add logins.', null, s);
     } else {
       const self = before.id === s.userId;
       const owner = this.isOwner(s, before.accountId);
@@ -288,9 +354,16 @@ export class SyncService {
       accountId = before.accountId;
       platformRole = before.platformRole;
       if (plat) {
-        role = d.role || role;
-        status = d.status || status;
-        platformRole = d.prole ?? platformRole;
+        // only the Owner role manages the Moi Point team, and nobody becomes staff by editing a customer
+        const team = before.role === 'platform';
+        if (!(team ? c.staff!.owner || self : c.staff!.edit)) return this.no('users', id, 'Your role can’t change this person.', before, s);
+        if (team && c.staff!.owner) {
+          status = d.status || status;
+          platformRole = d.prole ?? platformRole;
+        } else if (!team) {
+          status = d.status || status;
+          if (['admin', 'manager', 'collector'].includes(d.role)) role = d.role;
+        }
       } else if (owner && !self) {
         if (['manager', 'collector'].includes(d.role)) role = d.role;
         if (['active', 'disabled', 'deleted'].includes(d.status)) status = d.status;
@@ -330,7 +403,7 @@ export class SyncService {
       for (const k of ['plan', 'status', 'owner', 'sub', 'grants']) data[k] = prev[k];
     }
     const cols: any = { name: String(d.name || before.name), status: plat ? d.status || before.status : before.status, plan: plat ? d.plan || before.plan : before.plan, ownerId: before.ownerId };
-    const row = await tx.account.update({ where: { id }, data: { ...cols, data, wallet: plat && d.wallet ? d.wallet : (before.wallet as any), rev: c.rev } });
+    const row = await tx.account.update({ where: { id }, data: { ...cols, data, wallet: c.staff?.money && d.wallet ? d.wallet : (before.wallet as any), rev: c.rev } });
     c.touched.add(id);
     return this.yes('accounts', id, row, s);
   }
@@ -350,10 +423,13 @@ export class SyncService {
       if (!this.isOwner(s, d.acc)) return this.no('events', id, 'Only the owner can create an event.', null, s);
       const no = await this.nextEventNo(tx);
       if (d.no && d.no !== no) c.evNoMap.set(d.no, no);
-      const data = { ...d, no };
-      const n = +c.pricing.evFree === 0 ? 0 : +c.pricing.evFree || 20;
-      if (d.freeCr && n > 0) await this.grant(tx, c, d.acc, n, 0, `Free credits · ${d.name}`, `EVFREE-${no}`);
-      const row = await this.write(tx, c, 'events', id, { accountId: d.acc, no, token: d.token ?? null, date: d.date ?? null, status: d.status || 'active' }, data);
+      const token = eventToken(d.token);
+      const status = EVENT_STATUS.has(d.status) ? d.status : 'active';
+      const data = { ...d, no, token, status };
+      delete data.oldNo;
+      delete data.bookSent;
+      if (d.freeCr) await this.grantFreeCredits(tx, c, d.acc, d.name, no);
+      const row = await this.write(tx, c, 'events', id, { accountId: d.acc, no, token, date: d.date ?? null, status }, data);
       s.eventIds.push(id);
       c.touched.add(d.acc);
       c.scopeChanged = true;
@@ -362,22 +438,40 @@ export class SyncService {
     const h = s.helperOn[id];
     if (!this.isOwner(s, before.accountId) && h?.role !== 'manager') return this.no('events', id, 'Only the owner or an Event Admin can change this event.', before, s);
     const prev: any = before.data;
-    const data = { ...d, acc: before.accountId, no: before.no, token: before.token };
-    if (prev.bookSent && !d.bookSent) data.bookSent = prev.bookSent;
-    const row = await this.write(tx, c, 'events', id, { accountId: before.accountId, no: before.no, token: before.token, date: d.date ?? before.date, status: d.status || before.status }, data);
+    const status = EVENT_STATUS.has(d.status) ? d.status : before.status;
+    const data = { ...d, acc: before.accountId, no: before.no, token: before.token, status };
+    // only the server writes these: when the Moi Book went out, old numbers, and credits already given
+    for (const k of ['bookSent', 'oldNo', 'freeCr']) {
+      if (prev[k] === undefined) delete data[k];
+      else data[k] = prev[k];
+    }
+    if (d.freeCr && !prev.freeCr && status !== 'draft') {
+      await this.grantFreeCredits(tx, c, before.accountId, d.name, before.no ?? id);
+      data.freeCr = d.freeCr;
+    }
+    const row = await this.write(tx, c, 'events', id, { accountId: before.accountId, no: before.no, token: before.token, date: d.date ?? before.date, status }, data);
     c.touched.add(before.accountId);
     return this.yes('events', id, row, s);
+  }
+
+  private async grantFreeCredits(tx: Tx, c: Ctx, accountId: string, name: string, no: string) {
+    const n = +c.pricing.evFree === 0 ? 0 : +c.pricing.evFree || 20;
+    if (!(n > 0)) return;
+    const given = await tx.creditTxn.count({ where: { accountId, ref: { startsWith: 'EVFREE-' }, createdAt: { gte: new Date(Date.now() - 30 * DAY) } } });
+    if (given < FREE_EVENTS_PER_MONTH) await this.grant(tx, c, accountId, n, 0, `Free credits · ${name}`, `EVFREE-${no}`);
   }
 
   private async upEventUser(tx: Tx, c: Ctx, id: string, d: any): Promise<Outcome> {
     const s = c.scope;
     const before = await tx.eventUser.findUnique({ where: { id } });
-    const ev = await tx.event.findUnique({ where: { id: d.event_id } });
+    const ev = await tx.event.findUnique({ where: { id: before?.eventId ?? d.event_id } });
     if (!ev) return this.no('eventUsers', id, 'That event doesn’t exist.', before, s);
     const owner = this.isOwner(s, ev.accountId);
     const manager = s.helperOn[ev.id]?.role === 'manager';
     if (!owner && !(manager && d.role === 'collector')) return this.no('eventUsers', id, 'You can’t change who works on this event.', before, s);
-    const row = await this.write(tx, c, 'eventUsers', id, { accountId: ev.accountId, eventId: ev.id, userId: d.user_id, role: d.role }, d);
+    if (!['manager', 'collector'].includes(d.role)) return this.no('eventUsers', id, 'That role doesn’t exist.', before, s);
+    const userId = before?.userId ?? d.user_id;
+    const row = await this.write(tx, c, 'eventUsers', id, { accountId: ev.accountId, eventId: ev.id, userId, role: d.role }, { ...d, event_id: ev.id, user_id: userId });
     c.touched.add(ev.accountId);
     c.scopeChanged = true;
     return this.yes('eventUsers', id, row, s);
@@ -387,6 +481,7 @@ export class SyncService {
   private async allocateReceipt(tx: Tx, ev: any, wanted: string) {
     const m = String(wanted || '').match(/\/(\d+)$/);
     let seq = m ? +m[1] : 0;
+    if (seq > ev.moiSeq + RECEIPT_AHEAD) seq = 0;
     const taken = seq > 0 ? await tx.moi.findFirst({ where: { eventId: ev.id, seq } }) : true;
     if (taken) {
       const agg = await tx.moi.aggregate({ where: { eventId: ev.id }, _max: { seq: true } });
@@ -397,7 +492,7 @@ export class SyncService {
   }
 
   private moiCols(d: any, ev: any) {
-    return { accountId: ev.accountId, eventId: ev.id, mobile: d.c?.mobile || null, status: d.status, mode: d.mode || 'cash', amount: Math.round(+d.amount || 0) };
+    return { accountId: ev.accountId, eventId: ev.id, mobile: d.c?.mobile || null, status: d.status, mode: d.mode || 'cash', amount: Math.max(0, Math.round(+d.amount || 0)) };
   }
 
   private async upMoi(tx: Tx, c: Ctx, id: string, d: any): Promise<Outcome> {
@@ -406,9 +501,13 @@ export class SyncService {
     const ev = await tx.event.findUnique({ where: { id: before?.eventId ?? d.event_id } });
     if (!ev) return this.no('moi', id, 'That event doesn’t exist.', before, s);
     if (!this.can(s, ev)) return this.no('moi', id, 'You don’t have access to this event.', before, s);
+    if (!MOI_STATUS.has(d.status) || (d.mode && !MOI_MODE.has(d.mode))) return this.no('moi', id, 'This change could not be saved.', before, s);
 
     if (!before) {
       if (!['active', 'completed'].includes(ev.status)) return this.no('moi', id, 'This event isn’t taking Moi.', null, s);
+      // an online entry is confirmed by the gateway, and anything else needs someone allowed to verify
+      const simulated = d.mode === 'online' && cfg.paymentProvider === 'simulate' && cfg.devTools;
+      if (d.status === 'verified' && !simulated && !this.can(s, ev, 'verify')) return this.no('moi', id, 'You don’t have permission to do this.', null, s);
       const { seq, code } = await this.allocateReceipt(tx, ev, d.code);
       if (d.code !== code) c.codeMap.set(d.code, code);
       const data = { ...d, code, collected_by: s.userId ?? d.collected_by };
@@ -421,14 +520,14 @@ export class SyncService {
       const perm = s.helperOn[ev.id].perm;
       const b: any = before.data;
       const changed = b.status !== d.status;
-      if (changed) {
-        // taking the cash at the counter is receiving, which every helper does
-        const collecting = d.status === 'received' && ['tocollect', 'pending'].includes(b.status) && d.mode === 'cash';
-        const need = d.status === 'void' ? 'void' : collecting ? null : 'verify';
-        if (need && !perm[need]) return this.no('moi', id, 'You don’t have permission to do this.', before, s);
-      } else if (['amount', 'mode', 'kind'].some((k) => b[k] !== d[k]) || JSON.stringify(b.c) !== JSON.stringify(d.c) || JSON.stringify(b.gift ?? null) !== JSON.stringify(d.gift ?? null)) {
-        if (!perm.edit) return this.no('moi', id, 'You don’t have permission to edit this entry.', before, s);
-      }
+      // taking the cash at the counter is receiving, which every helper does
+      const collecting = changed && d.status === 'received' && ['tocollect', 'pending'].includes(b.status) && d.mode === 'cash';
+      if (changed && !collecting && !perm[d.status === 'void' ? 'void' : 'verify']) return this.no('moi', id, 'You don’t have permission to do this.', before, s);
+      // collecting can add the note saying cash replaced an unpaid UPI entry, and nothing else about the guest
+      const guest = (c: any) => canon(collecting ? { ...c, notes: null } : c);
+      const same = (k: string) => canon(b[k]) === canon(d[k]);
+      const edited = +b.amount !== +d.amount || !same('kind') || !same('gift') || (!collecting && !same('mode')) || guest(b.c) !== guest(d.c);
+      if (edited && !perm.edit) return this.no('moi', id, 'You don’t have permission to edit this entry.', before, s);
     }
     const data = { ...d, code: before.code, event_id: before.eventId };
     const row = await this.write(tx, c, 'moi', id, { ...this.moiCols(d, ev), code: before.code, seq: before.seq }, data);
@@ -480,7 +579,7 @@ export class SyncService {
     const s = c.scope;
     const before = await tx.stockAlert.findUnique({ where: { id } });
     if (before && s.kind !== 'platform') return this.no('stockAlerts', id, 'Only Moi Point can change this.', before, s);
-    const row = await this.write(tx, c, 'stockAlerts', id, { accountId: before?.accountId ?? d.acc ?? s.user?.accountId ?? null }, d);
+    const row = await this.write(tx, c, 'stockAlerts', id, { accountId: before?.accountId ?? (s.kind === 'platform' ? d.acc : s.user?.accountId) ?? null }, d);
     return this.yes('stockAlerts', id, row, s);
   }
 
@@ -503,7 +602,8 @@ export class SyncService {
         return p?.ds ? { ...r, ds: p.ds, st: p.st } : r;
       });
     }
-    const row = await this.write(tx, c, 'msgLog', id, { accountId: acc, eventId: d.ev ?? null }, data);
+    const logEv = d.ev ? await tx.event.findUnique({ where: { id: String(d.ev) }, select: { accountId: true } }) : null;
+    const row = await this.write(tx, c, 'msgLog', id, { accountId: acc, eventId: logEv?.accountId === acc ? d.ev : null }, data);
     c.touched.add(acc);
     return this.yes('msgLog', id, row, s);
   }
@@ -517,10 +617,12 @@ export class SyncService {
     const ev = eventId ? await tx.event.findUnique({ where: { id: eventId } }) : null;
     const owner = ownerId ? await tx.user.findUnique({ where: { id: ownerId } }) : null;
     const accountId = ev?.accountId ?? owner?.accountId ?? s.user?.accountId ?? null;
-    const allowed = s.kind === 'platform' || (ev ? this.can(s, ev) : ownerId === s.userId);
+    const allowed = s.kind === 'platform' || ((ev ? this.can(s, ev) : ownerId === s.userId) && (!ownerId || ownerId === s.userId || owner?.accountId === accountId));
     if (!allowed) return this.no('notifications', id, 'You can’t send this.', before, s);
 
     const data = { ...d };
+    const log = d.logId ? await tx.msgLog.findUnique({ where: { id: String(d.logId) } }) : null;
+    const logId = log?.accountId === accountId ? log!.id : null;
     for (const [from, to] of c.codeMap) if (typeof data.text === 'string') data.text = data.text.split(from).join(to);
     if (data.vars?.receipt && c.codeMap.has(data.vars.receipt)) data.vars.receipt = c.codeMap.get(data.vars.receipt);
 
@@ -536,38 +638,41 @@ export class SyncService {
         const k = eventId || 'rem';
         w.usage[k] = (w.usage[k] || 0) + 1;
         await tx.account.update({ where: { id: accountId }, data: { wallet: w, rev: c.rev } });
-        let media: any = null;
-        if (d.logId) {
-          const log = await tx.msgLog.findUnique({ where: { id: d.logId } });
-          const img = (log?.data as any)?.img;
-          if (typeof img === 'string') media = { image: img.startsWith('/') ? cfg.publicUrl + img : img };
-        }
+        // only the app's own saved photos go to the provider, never an address someone typed
+        const img = (log?.data as any)?.img;
+        const media = logId && typeof img === 'string' && img.startsWith('/uploads/') ? { image: cfg.publicUrl + img } : null;
         c.messages.push(await this.messages.enqueue(tx, {
-          trigger: d.trigger || 'C1', channel: d.channel, to: String(d.to), text: String(data.text || '').slice(0, 4096),
-          vars: data.vars ?? null, media, paidBy: 'customer', accountId, eventId, notificationId: id, logId: d.logId ?? null,
+          trigger: DEVICE_TRIGGERS.has(d.trigger) ? d.trigger : 'C1', channel: d.channel, to: String(d.to), text: String(data.text || '').slice(0, 4096),
+          vars: data.vars ?? null, media, paidBy: 'customer', accountId, eventId, notificationId: id, logId,
         }));
       } else {
         status = 'Not sent · no credits';
         data.status = status;
-        if (d.mid) await this.markMoiNotified(tx, c, d.mid, d.channel, status);
-        if (d.logId) await this.markLogNoCredit(tx, c, d.logId, String(d.to), d.channel);
+        if (d.mid) await this.markMoiNotified(tx, c, accountId, d.mid, d.channel, status);
+        if (logId) await this.markLogNoCredit(tx, c, logId, String(d.to), d.channel);
       }
       c.touched.add(accountId);
     } else if (wantsSend && d.channel === 'Email' && s.user?.email && d.to === s.user.email) {
-      // calendar invites go only to the person's own address
+      // calendar invites go only to the person's own address, and Moi Point pays for them, so each account has a daily limit
       dispatchedAt = new Date();
       const ics = typeof d.ics === 'string' && d.ics.startsWith('BEGIN:VCALENDAR') && d.ics.length <= 8000 ? d.ics : null;
       delete data.ics;
-      c.messages.push(await this.messages.enqueue(tx, { trigger: 'M5', channel: 'Email', to: String(d.to), text: String(data.text || ''), vars: d.vars ?? undefined, media: ics ? { document: { name: 'reminder.ics', text: ics } } : undefined, paidBy: 'platform', accountId, notificationId: id }));
+      const today = await tx.message.count({ where: { trigger: 'M5', ...(accountId ? { accountId } : { to: String(d.to) }), createdAt: { gte: new Date(Date.now() - DAY) } } });
+      if (today < CALENDAR_INVITES_PER_DAY) {
+        c.messages.push(await this.messages.enqueue(tx, { trigger: 'M5', channel: 'Email', to: String(d.to), text: String(data.text || '').slice(0, 300), vars: d.vars ?? undefined, media: ics ? { document: { name: 'reminder.ics', text: ics } } : undefined, paidBy: 'platform', accountId, notificationId: id }));
+      } else {
+        status = 'Not sent';
+        data.status = status;
+      }
     }
     const row = await this.write(tx, c, 'notifications', id, { accountId, eventId, ownerId, channel: String(d.channel || 'In app'), status, dispatchedAt }, data);
     if (accountId) c.touched.add(accountId);
     return this.yes('notifications', id, row, s);
   }
 
-  private async markMoiNotified(tx: Tx, c: Ctx, moiId: string, channel: string, status: string) {
-    const m = await tx.moi.findUnique({ where: { id: moiId } });
-    if (!m) return;
+  private async markMoiNotified(tx: Tx, c: Ctx, accountId: string, moiId: string, channel: string, status: string) {
+    const m = await tx.moi.findUnique({ where: { id: String(moiId) } });
+    if (!m || m.accountId !== accountId) return;
     const d: any = m.data;
     (d.notified || []).forEach((r: any) => {
       if (r.channel === channel) r.status = status;
@@ -589,7 +694,7 @@ export class SyncService {
     const s = c.scope;
     const before = await tx.audit.findUnique({ where: { id } });
     // the activity log can be added to but never rewritten
-    if (before) return this.yes('audit', id, before, s);
+    if (before) return { col: 'audit', id, ok: true, data: (await this.canSee('audit', id, s)) ? this.toClient('audit', before, s) : null };
     const ev = d.eid ? await tx.event.findUnique({ where: { id: d.eid } }) : null;
     if (ev && !this.can(s, ev)) return this.no('audit', id, 'You don’t have access to this event.', null, s);
     const accountId = ev?.accountId ?? (s.kind === 'platform' ? (d.acc ?? null) : (s.user?.accountId ?? null));
@@ -622,22 +727,38 @@ export class SyncService {
 
   private async savePeople(tx: Tx, c: Ctx, people?: Record<string, any>) {
     if (!people) return;
-    const mine = c.scope.kind === 'platform' ? null : new Set(c.scope.accountIds);
+    const s = c.scope;
     for (const [mobile, rec] of Object.entries(people)) {
-      if (!mobOk(mobile)) continue;
+      if (!mobOk(mobile) || !rec || typeof rec !== 'object') continue;
       const clean = this.storage.externalize(rec);
       const old = await tx.person.findUnique({ where: { mobile } });
-      const claimed: string[] = (clean.accs || []).filter((a: string) => !mine || mine.has(a));
-      const accounts = [...new Set([...(old?.accounts ?? []), ...claimed])];
-      const data = { ...((old?.data as object) ?? {}), ...clean, accs: accounts };
+      if (s.kind === 'platform') {
+        if (!old) continue;
+        const { consent, optOut, fam, accs, ...fields } = clean;
+        await tx.person.update({ where: { mobile }, data: { data: { ...(old.data as object), ...fields }, rev: c.rev } });
+        continue;
+      }
+      // a family speaks only for guests it really has
+      const families = await this.familiesWith(tx, mobile, s.liveAccountIds);
+      if (!families.length) continue;
+      const accounts = [...new Set([...(old?.accounts ?? []), ...families])];
+      let data: any = old?.data ?? null;
+      for (const a of families) data = mergePerson(data, mobile, a, accounts, clean);
       await tx.person.upsert({ where: { mobile }, create: { mobile, accounts, data, rev: c.rev }, update: { accounts, data, rev: c.rev, deleted: false } });
     }
   }
 
+  private async familiesWith(tx: Tx, mobile: string, accountIds: string[]) {
+    const pick = { select: { accountId: true }, distinct: ['accountId'] as any };
+    const moi = await tx.moi.findMany({ where: { accountId: { in: accountIds }, mobile, deleted: false }, ...pick });
+    const guests = await tx.guest.findMany({ where: { accountId: { in: accountIds }, deleted: false, data: { path: ['mobile'], equals: mobile } }, ...pick });
+    return [...new Set([...moi, ...guests].map((x: any) => x.accountId as string))];
+  }
+
   private async saveDocs(tx: Tx, c: Ctx, docs?: Record<string, any>) {
-    if (!docs || c.scope.kind !== 'platform') return;
+    if (!docs || !c.staff) return;
     for (const [key, value] of Object.entries(docs)) {
-      if (key.startsWith('_') || DOC_NEVER_FROM_BROWSER.has(key) || Object.values(PLATFORM_ARRAYS).includes(key)) continue;
+      if (key.startsWith('_') || DOC_NEVER_FROM_BROWSER.has(key) || Object.values(PLATFORM_ARRAYS).includes(key) || !mayWriteDoc(c.staff, key)) continue;
       const data = this.storage.externalize(value) ?? {};
       await tx.platformDoc.upsert({ where: { key }, create: { key, data, rev: c.rev }, update: { data, rev: c.rev } });
     }
@@ -650,7 +771,10 @@ export class SyncService {
     for (const [id, plain] of Object.entries(pw)) {
       const u = await tx.user.findUnique({ where: { id } });
       // the screens check these first, so a refusal here only means someone is tampering
-      if (!u || !pwOk(String(plain)) || u.id === c.scope.userId || !this.isOwner(c.scope, u.accountId)) continue;
+      if (!u || !pwOk(String(plain)) || u.id === c.scope.userId) continue;
+      const newHelper = u.role === 'collector' && !u.passwordHash && !!u.accountId && this.managerIn(c.scope, u.accountId);
+      const may = c.staff ? (u.role === 'platform' ? c.staff.owner : c.staff.edit && c.staff.contacts) : this.isOwner(c.scope, u.accountId) || newHelper;
+      if (!may) continue;
       await tx.user.update({
         where: { id },
         data: { passwordHash: await hashPassword(plain), data: { ...(u.data as object), ...pwHintFields(plain) }, rev: c.rev },

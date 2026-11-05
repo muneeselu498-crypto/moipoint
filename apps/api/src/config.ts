@@ -1,3 +1,4 @@
+import os from 'node:os';
 import path from 'node:path';
 
 // Load .env before anything reads it. A real server can set these variables directly instead.
@@ -11,6 +12,14 @@ process.env.TZ = process.env.TZ || 'Asia/Kolkata';
 
 const flag = (v?: string) => v === '1' || v === 'true';
 
+/** This computer's addresses on the local network, home Wi-Fi first. */
+export const lanAddresses = () =>
+  Object.values(os.networkInterfaces())
+    .flat()
+    .filter((i) => i && i.family === 'IPv4' && !i.internal)
+    .map((i) => i!.address)
+    .sort((a, b) => Number(b.startsWith('192.168.')) - Number(a.startsWith('192.168.')));
+
 export const cfg = {
   port: Number(process.env.PORT || 4600),
   host: process.env.HOST || '0.0.0.0',
@@ -20,9 +29,18 @@ export const cfg = {
   messageProvider: process.env.MESSAGE_PROVIDER || 'dev',
   webhookUrl: process.env.MESSAGE_WEBHOOK_URL || '',
   webhookSecret: process.env.MESSAGE_WEBHOOK_SECRET || '',
+  /** How many proxies sit in front of this server. Stays 0 unless one really does, or callers could fake their address. */
+  trustProxy: Number(process.env.TRUST_PROXY) || 0,
   paymentProvider: process.env.PAYMENT_PROVIDER || 'simulate',
   chromePath: process.env.CHROME_PATH || '',
   webDist: path.resolve(__dirname, '../../web/dist'),
   uploadDir: path.resolve(__dirname, '../uploads'),
   secureCookie: (process.env.PUBLIC_URL || '').startsWith('https://'),
+};
+
+/** The address printed in QR codes. On a laptop that means the Wi-Fi address, so a phone can scan it. */
+export const publicBase = () => {
+  if (!/\/\/(localhost|127\.0\.0\.1)\b/.test(cfg.publicUrl)) return cfg.publicUrl;
+  const ip = lanAddresses()[0];
+  return ip ? `http://${ip}:${cfg.port}` : cfg.publicUrl;
 };

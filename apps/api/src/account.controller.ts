@@ -7,6 +7,7 @@ import { MessagesService } from './messages.service';
 import { PrismaService } from './prisma.service';
 import { ScopeService } from './scope.service';
 import { AuthedRequest, SessionService } from './session';
+import { pageOk, StaffRole, staffRole } from './staff';
 import { StreamService } from './stream.service';
 import { SyncService } from './sync.service';
 import { addDays, fail, mobOk, normMob, today, uid } from './util';
@@ -113,7 +114,7 @@ export class AccountController {
     const eventId = this.books.takePass(token || '');
     const ev = eventId ? await this.prisma.event.findUnique({ where: { id: eventId } }) : null;
     if (!ev) return fail('Not found', 404);
-    const scope = { kind: 'tenant' as const, userId: null, user: null, ownerOf: [ev.accountId], accountIds: [ev.accountId], eventIds: [ev.id], helperOn: {}, key: 'render' };
+    const scope = { kind: 'tenant' as const, userId: null, user: null, ownerOf: [ev.accountId], accountIds: [ev.accountId], liveAccountIds: [ev.accountId], eventIds: [ev.id], helperOn: {}, key: 'render' };
     return { me: null, ...(await this.sync.buildState(scope)) };
   }
 
@@ -126,21 +127,26 @@ export class AccountController {
     if (!ev) return fail('That event doesn’t exist.', 404);
     const can = s.kind === 'platform' || s.ownerOf.includes(ev.accountId) || s.helperOn[id]?.role === 'manager';
     if (!can) fail('You can’t send this.', 403);
+    if (await this.books.overLimit(ev.accountId)) fail('The Moi Book has been sent many times today. Please try again tomorrow.', 429);
     if (!(await this.books.send(ev, true))) fail('There is no mobile or email to send it to.');
     return { ok: true };
   }
 
   // ---------- Moi Point staff ----------
 
-  private staff(req: AuthedRequest) {
-    if (req.scope.kind !== 'platform') fail('This is for Moi Point staff.', 403);
+  /** Checks the caller is staff, and that their role covers this. */
+  private async staff(req: AuthedRequest, allowed: (r: StaffRole) => boolean = () => true) {
+    const r = await staffRole(this.prisma, req.scope);
+    if (!r) return fail('This is for Moi Point staff.', 403);
+    if (!allowed(r)) fail('Your role can’t do this.', 403);
+    return r;
   }
 
   /** Support view: staff see a customer's account. The session remembers who is really behind it. */
   @Post('admin/impersonate')
   @HttpCode(200)
   async impersonate(@Req() req: AuthedRequest, @Body() body: unknown, @Res({ passthrough: true }) res: Response) {
-    this.staff(req);
+    await this.staff(req, (r) => r.contacts && r.edit);
     const { userId } = parse(z.object({ userId: z.string() }), body);
     const u = await this.prisma.user.findUnique({ where: { id: userId } });
     if (!u || u.role === 'platform') return fail('That person can’t be opened.', 404);
@@ -170,7 +176,7 @@ export class AccountController {
   @Post('admin/campaign')
   @HttpCode(200)
   async campaign(@Req() req: AuthedRequest, @Body() body: unknown) {
-    this.staff(req);
+    await this.staff(req, (r) => pageOk(r, 'campaigns'));
     const b = parse(z.object({ aud: z.enum(['organizers', 'guests']), ch: z.enum(['wa', 'sms', 'both']), text: z.string().min(1).max(4000), mobiles: z.array(z.string()).max(50000) }), body);
     let mobiles = [...new Set(b.mobiles.map(normMob).filter(mobOk))];
     let skipped = 0;

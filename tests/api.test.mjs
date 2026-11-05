@@ -656,3 +656,375 @@ describe('robustness', () => {
     assert.equal(r.json.full, true);
   });
 });
+
+describe('attacks from the security review', () => {
+  const ALL_PERMS = { list: 1, edit: 1, void: 1, exp: 1, pay: 1, verify: 1, rep: 1, out: 0 };
+  const anyMoi = async () => {
+    const o = await owner();
+    return { o, moi: o.state.state.moi.find((m) => m.c.mobile), ev: o.state.state.events[0] };
+  };
+
+  /** A helper on one function of a new family, ready to log in on their own device. */
+  async function helperOn(fam, role, perm) {
+    const id = uniq('e');
+    await fam.pushOne('events', id, { id, acc: fam.accountId, name: 'Fn', date: FUTURE, status: 'active', token: uniq('t') });
+    const uidNew = uniq('u');
+    const email = `${uniq('h')}@example.com`;
+    const m = mobile();
+    await fam.post('/api/sync', { upserts: [{ col: 'users', id: uidNew, data: { id: uidNew, acc: fam.accountId, name: 'Helper', email, mobile: m, username: email, role } }], deletes: [], pw: { [uidNew]: 'Helper1234' } });
+    const linkId = uniq('a');
+    await fam.pushOne('eventUsers', linkId, { id: linkId, event_id: id, user_id: uidNew, role, access: { mode: 'always' }, ...(perm ? { perm } : {}) });
+    const d = new Device();
+    await d.login(email, 'Helper1234');
+    return { d, eventId: id, userId: uidNew, email, mobile: m, linkId };
+  }
+
+  test('a stranger cannot download the guest directory', async () => {
+    const r = await new Device().get('/api/changes?since=0&scope=anon');
+    assert.deepEqual(r.json.people, {});
+    assert.deepEqual(r.json.changes, []);
+  });
+
+  test('a refused write gives nothing back to a stranger', async () => {
+    const { moi, ev } = await anyMoi();
+    const a = await newCustomer();
+    for (const [col, id] of [['moi', moi.id], ['events', ev.id], ['accounts', 'A1001'], ['users', 'u1']]) {
+      const r = await a.pushOne(col, id, { id, data: {} });
+      assert.equal(r.ok, false, `${col} must be refused`);
+      assert.equal(r.data, null, `${col} must not come back`);
+    }
+    const o = await owner();
+    const log = o.state.state.audit[0];
+    const r = await a.pushOne('audit', log.id, { id: log.id });
+    assert.equal(r.data, null, 'the activity log must not come back');
+  });
+
+  test('a refusal still restores the record for someone allowed to read it', async () => {
+    const fam = await newCustomer();
+    const h = await helperOn(fam, 'collector');
+    const m = moiRecord(h.eventId);
+    await fam.pushOne('moi', m.id, m);
+    const r = await h.d.pushOne('moi', m.id, { ...m, amount: 1 });
+    assert.equal(r.ok, false);
+    assert.equal(r.data.amount, m.amount);
+  });
+
+  test('knowing a helper’s email does not take over their login', async () => {
+    const fam = await newCustomer();
+    const h = await helperOn(fam, 'collector');
+    const d = new Device();
+    const m = mobile();
+    const otp = await d.post('/api/auth/signup/otp', { mobile: m });
+    const v = await d.post('/api/auth/signup/verify', { mobile: m, code: otp.json.devCode });
+    const r = await d.post('/api/auth/signup', { mobile: m, ticket: v.json.ticket, name: 'Attacker', email: h.email, password: 'Stolen12345', kind: 'Family', state: 'Tamil Nadu', district: 'Madurai', city: 'Madurai', source: 'x', lang: 'en' });
+    assert.equal(r.status, 409);
+    await new Device().login(h.email, 'Helper1234');
+    assert.equal((await new Device().post('/api/auth/login', { email: h.email, password: 'Stolen12345' })).status, 401);
+  });
+
+  test('a helper can still become an owner on their own confirmed mobile', async () => {
+    const fam = await newCustomer();
+    const h = await helperOn(fam, 'collector');
+    const d = new Device();
+    const otp = await d.post('/api/auth/signup/otp', { mobile: h.mobile });
+    const v = await d.post('/api/auth/signup/verify', { mobile: h.mobile, code: otp.json.devCode });
+    const r = await d.post('/api/auth/signup', { mobile: h.mobile, ticket: v.json.ticket, name: 'Promoted', email: h.email, password: 'Newowner123', kind: 'Family', state: 'Tamil Nadu', district: 'Madurai', city: 'Madurai', source: 'x', lang: 'en' });
+    assert.equal(r.status, 200);
+    assert.equal(r.json.me, h.userId);
+  });
+
+  test('a disabled helper cannot sign up their way back in', async () => {
+    const fam = await newCustomer();
+    const h = await helperOn(fam, 'collector');
+    const u = (await fam.get('/api/state')).json.state.users.find((x) => x.id === h.userId);
+    await fam.pushOne('users', h.userId, { ...u, status: 'disabled' });
+    const d = new Device();
+    const otp = await d.post('/api/auth/signup/otp', { mobile: h.mobile });
+    const v = await d.post('/api/auth/signup/verify', { mobile: h.mobile, code: otp.json.devCode });
+    const r = await d.post('/api/auth/signup', { mobile: h.mobile, ticket: v.json.ticket, name: 'Back', email: h.email, password: 'Newowner123', kind: 'Family', state: 'Tamil Nadu', district: 'Madurai', city: 'Madurai', source: 'x', lang: 'en' });
+    assert.equal(r.status, 403);
+  });
+
+  test('a page script cannot be planted in a screenshot, a logo or an id', async () => {
+    const attack = 'x" onerror="alert(1)';
+    const g = new Device();
+    const m = mobile();
+    const otp = await g.post('/api/public/otp/send', { eventId: 'e2', mobile: m });
+    const v = await g.post('/api/public/otp/verify', { eventId: 'e2', mobile: m, code: otp.json.devCode });
+    const bad = await g.post('/api/public/moi', { eventId: 'e2', mobile: m, ticket: v.json.ticket, mode: 'upi', amount: 100, c: { name: 'X' }, utr: '1', shot: attack });
+    assert.equal(bad.status, 400);
+
+    const a = await newCustomer();
+    const id = uniq('e');
+    const ev = await a.pushOne('events', id, { id, acc: a.accountId, name: 'Fn', date: FUTURE, status: 'active', token: uniq('t'), logo: attack });
+    assert.equal(ev.ok, true);
+    assert.equal(ev.data.logo, null);
+    const oddId = 'm" onmouseover="alert(1)';
+    assert.equal((await a.pushOne('moi', oddId, moiRecord(id))).ok, false);
+  });
+
+  test('the page refuses any script that was not built into it', async () => {
+    const r = await fetch(`${BASE}/`);
+    const csp = r.headers.get('content-security-policy');
+    const scripts = csp.split(';').find((x) => x.trim().startsWith('script-src'));
+    assert.ok(scripts.includes("'self'") && scripts.includes("'sha256-"));
+    assert.ok(!scripts.includes('unsafe-inline') && !scripts.includes('unsafe-eval'));
+    assert.ok(csp.includes("frame-ancestors 'none'"));
+    assert.ok((await fetch(`${BASE}/index.html`)).headers.get('content-security-policy'));
+  });
+
+  test('free event credits stop after five events a month', async () => {
+    const a = await newCustomer();
+    const before = await credits(a);
+    for (let i = 0; i < 8; i++) {
+      const id = uniq('e');
+      await a.pushOne('events', id, { id, acc: a.accountId, name: 'Fn', date: FUTURE, status: 'active', token: uniq('t'), freeCr: 20 });
+    }
+    assert.equal((await credits(a)) - before, 100);
+  });
+
+  test('a staff login never shows a password hint', async () => {
+    const r = await new Device().post('/api/auth/forgot/find', { email: 'master@moipoint.in' });
+    assert.equal(r.status, 200);
+    assert.equal(r.json.pwHint, undefined);
+    assert.equal(r.json.pwLen, undefined);
+    const c = await newCustomer();
+    assert.ok((await new Device().post('/api/auth/forgot/find', { email: c.email })).json.pwHint, 'customers keep the agreed hint');
+  });
+
+  test('a family cannot claim a guest it does not have, or change their consent', async () => {
+    const { moi } = await anyMoi();
+    const a = await newCustomer();
+    await a.post('/api/sync', { upserts: [], deletes: [], people: { [moi.c.mobile]: { name: 'Hacked', accs: [a.accountId], consent: true, optOut: false } } });
+    const mine = (await a.get('/api/state')).json.state.people;
+    assert.equal(mine[moi.c.mobile], undefined, 'a claim needs a real Moi or guest record');
+    const s = await staff();
+    const person = (await s.get('/api/state')).json.state.people[moi.c.mobile];
+    assert.notEqual(person.name, 'Hacked');
+    assert.notEqual(person.consent, true);
+  });
+
+  test('one family never sees what another family wrote about a shared guest', async () => {
+    const m = mobile();
+    const a = await newCustomer();
+    const b = await newCustomer();
+    for (const [fam, address] of [[a, 'Private A'], [b, 'Private B']]) {
+      const id = uniq('e');
+      await fam.pushOne('events', id, { id, acc: fam.accountId, name: 'Fn', date: FUTURE, status: 'active', token: uniq('t') });
+      const rec = moiRecord(id, { c: { name: 'Shared Guest', mobile: m, place: 'Madurai', relationship: 'Friend', address } });
+      await fam.pushOne('moi', rec.id, rec);
+      await fam.post('/api/sync', { upserts: [], deletes: [], people: { [m]: { mobile: m, name: 'Shared Guest', place: 'Madurai', address, rel: 'Friend', at: Date.now(), accs: [fam.accountId] } } });
+    }
+    const seenA = (await a.get('/api/state')).json.state.people[m];
+    const seenB = (await b.get('/api/state')).json.state.people[m];
+    assert.equal(seenA.address, 'Private A');
+    assert.equal(seenB.address, 'Private B');
+    assert.deepEqual(seenB.accs, [b.accountId]);
+  });
+
+  test('a guest who gives by QR is remembered for that family', async () => {
+    const m = mobile();
+    const g = new Device();
+    const otp = await g.post('/api/public/otp/send', { eventId: 'e2', mobile: m });
+    const v = await g.post('/api/public/otp/verify', { eventId: 'e2', mobile: m, code: otp.json.devCode });
+    await g.post('/api/public/moi', { eventId: 'e2', mobile: m, ticket: v.json.ticket, mode: 'cash', amount: 101, c: { name: 'Qr Guest', place: 'Salem' } });
+    const seen = (await (await owner()).get('/api/state')).json.state.people[m];
+    assert.equal(seen.name, 'Qr Guest');
+  });
+
+  test('the Moi Book cannot be used to send free messages all day', async () => {
+    const a = await newCustomer();
+    const id = uniq('e');
+    await a.pushOne('events', id, { id, acc: a.accountId, name: 'Fn', date: FUTURE, status: 'active', token: uniq('t'), orgMobile: mobile() });
+    const m = moiRecord(id);
+    await a.pushOne('moi', m.id, m);
+    const codes = [];
+    for (let i = 0; i < 22; i++) codes.push((await a.post(`/api/events/${id}/book`)).status);
+    assert.ok(codes.includes(429), `the limit never applied: ${codes}`);
+    const sent = (await outbox()).filter((x) => x.trigger === 'M4' && x.accountId === a.accountId);
+    assert.ok(sent.length <= 20, `${sent.length} sent`);
+  });
+
+  test('each staff role can do only its own job', async () => {
+    const login = async (email, pw) => { const d = new Device(); await d.login(email, pw); return d; };
+    const marketing = await login('marketing@moipoint.in', 'marketing123');
+    const support = await login('support@moipoint.in', 'support123');
+    const finance = await login('finance@moipoint.in', 'finance123');
+    const me = (d) => d.state.state.users.find((u) => u.id === d.state.me);
+
+    await marketing.pushOne('users', me(marketing).id, { ...me(marketing), prole: 'owner' });
+    assert.equal((await login('marketing@moipoint.in', 'marketing123')).state.state.users.find((u) => u.email === 'marketing@moipoint.in').prole, 'marketing', 'no promoting yourself');
+
+    await support.post('/api/sync', { upserts: [], deletes: [], pw: { p1: 'Taken12345' } });
+    await login('master@moipoint.in', 'master123');
+
+    const acct = (await marketing.get('/api/state')).json.state.accounts.find((x) => x.id === 'A1001');
+    const forged = await marketing.pushOne('accounts', 'A1001', { ...acct, wallet: { ...acct.wallet, credits: 999999 } });
+    assert.equal(forged.ok, false, 'a read-only role changes no customer');
+    await support.pushOne('accounts', 'A1001', { ...acct, wallet: { ...acct.wallet, credits: 999999 } });
+    const after = (await finance.get('/api/state')).json.state.accounts.find((x) => x.id === 'A1001');
+    assert.notEqual(after.wallet.credits, 999999, 'only a money role changes credits');
+
+    const price = (await finance.get('/api/state')).json.state.platform.pricing;
+    await marketing.post('/api/sync', { upserts: [], deletes: [], platform: { pricing: { ...price, perMsg: 0 } } });
+    await support.post('/api/sync', { upserts: [], deletes: [], platform: { roleCfg: { marketing: { money: true } } } });
+    const check = await login('master@moipoint.in', 'master123');
+    assert.equal(check.state.state.platform.pricing.perMsg, price.perMsg);
+    assert.equal(check.state.state.platform.roleCfg, undefined);
+
+    assert.equal((await marketing.post('/api/admin/impersonate', { userId: 'u1' })).status, 403);
+    assert.equal((await support.post('/api/admin/campaign', { aud: 'organizers', ch: 'wa', text: 'x', mobiles: [] })).status, 403);
+    assert.equal((await marketing.post('/api/admin/campaign', { aud: 'organizers', ch: 'wa', text: 'x', mobiles: [] })).status, 200);
+  });
+
+  test('nobody becomes staff by editing a customer', async () => {
+    const support = new Device();
+    await support.login('support@moipoint.in', 'support123');
+    const fam = await newCustomer();
+    const u = fam.state.state.users.find((x) => x.id === fam.state.me);
+    await support.pushOne('users', u.id, { ...u, role: 'platform', prole: 'owner' });
+    const again = new Device();
+    await again.login(fam.email, 'Testpass123');
+    assert.equal(again.state.state.users.find((x) => x.id === u.id).role, 'admin');
+  });
+
+  test('a collector cannot change an amount while collecting it, or mark their own entry verified', async () => {
+    const fam = await newCustomer();
+    const h = await helperOn(fam, 'collector');
+    const m = moiRecord(h.eventId, { status: 'tocollect', amount: 5001 });
+    await fam.pushOne('moi', m.id, m);
+    assert.equal((await h.d.pushOne('moi', m.id, { ...m, status: 'received', amount: 1 })).ok, false);
+    const ok = await h.d.pushOne('moi', m.id, { ...m, status: 'received', collected_by: h.userId });
+    assert.equal(ok.ok, true, 'plain collecting still works');
+    const fresh = moiRecord(h.eventId, { status: 'verified', mode: 'upi' });
+    assert.equal((await h.d.pushOne('moi', fresh.id, fresh)).ok, false);
+  });
+
+  test('taking cash for an unpaid UPI entry still works for a collector', async () => {
+    const fam = await newCustomer();
+    const h = await helperOn(fam, 'collector');
+    const m = moiRecord(h.eventId, { status: 'pending', mode: 'upi' });
+    await fam.pushOne('moi', m.id, m);
+    const r = await h.d.pushOne('moi', m.id, { ...m, status: 'received', mode: 'cash', c: { ...m.c, notes: 'UPI not paid · cash taken at counter' } });
+    assert.equal(r.ok, true);
+  });
+
+  test('a removed helper loses the family’s guests', async () => {
+    const fam = await newCustomer();
+    const h = await helperOn(fam, 'manager', ALL_PERMS);
+    const gid = uniq('g');
+    await fam.pushOne('guests', gid, { id: gid, acc: fam.accountId, name: 'Private Guest', mobile: mobile() });
+    assert.equal((await h.d.get('/api/state')).json.state.guests.length, 1);
+    await fam.post('/api/sync', { upserts: [], deletes: [{ col: 'eventUsers', id: h.linkId }] });
+    assert.equal((await h.d.get('/api/state')).json.state.guests.length, 0);
+  });
+
+  test('a helper with the list switched off sees only their own entries and the waiting ones', async () => {
+    const fam = await newCustomer();
+    const h = await helperOn(fam, 'collector', { list: 0, pay: 0, exp: 0 });
+    const other = moiRecord(h.eventId, { collected_by: 'someone' });
+    const waiting = moiRecord(h.eventId, { status: 'tocollect' });
+    await fam.pushOne('moi', other.id, other);
+    await fam.pushOne('moi', waiting.id, waiting);
+    const own = moiRecord(h.eventId);
+    await h.d.pushOne('moi', own.id, own);
+    const ex = uniq('x');
+    await fam.pushOne('expenses', ex, { id: ex, event_id: h.eventId, amount: 100, what: 'Hall' });
+    const s = (await h.d.get('/api/state')).json.state;
+    assert.deepEqual(s.moi.map((x) => x.id).sort(), [own.id, waiting.id].sort());
+    assert.equal(s.expenses.length, 0);
+  });
+
+  test('one guest code cannot keep spending the family’s credits', async () => {
+    const m = mobile();
+    const g = new Device();
+    const otp = await g.post('/api/public/otp/send', { eventId: 'e2', mobile: m });
+    const v = await g.post('/api/public/otp/verify', { eventId: 'e2', mobile: m, code: otp.json.devCode });
+    const codes = [];
+    for (let i = 0; i < 12; i++) codes.push((await g.post('/api/public/moi', { eventId: 'e2', mobile: m, ticket: v.json.ticket, mode: 'cash', amount: 10, c: { name: 'Spam' } })).status);
+    assert.equal(codes.filter((c) => c === 200).length, 10);
+    assert.equal(codes.at(-1), 429);
+  });
+
+  test('a void function sends no guest codes', async () => {
+    const a = await newCustomer();
+    const id = uniq('e');
+    await a.pushOne('events', id, { id, acc: a.accountId, name: 'Fn', date: FUTURE, status: 'void', token: uniq('t') });
+    assert.equal((await new Device().post('/api/public/otp/send', { eventId: id, mobile: mobile() })).status, 400);
+  });
+
+  test('suspending an account stops its live sessions at once', async () => {
+    const fam = await newCustomer();
+    assert.equal((await fam.get('/api/state')).json.me, fam.state.me);
+    const s = await staff();
+    const acct = (await s.get('/api/state')).json.state.accounts.find((x) => x.id === fam.accountId);
+    await s.pushOne('accounts', fam.accountId, { ...acct, status: 'suspended' });
+    assert.equal((await fam.get('/api/state')).json.me, null);
+    assert.equal((await fam.push([])).status, 401);
+    await s.pushOne('accounts', fam.accountId, { ...acct, status: 'active' });
+  });
+
+  test('guesses sent together still count against the five tries', async () => {
+    const m = mobile();
+    const d = new Device();
+    const otp = await d.post('/api/auth/signup/otp', { mobile: m });
+    const wrong = otp.json.devCode === '000000' ? '111111' : '000000';
+    await Promise.all(Array.from({ length: 12 }, () => new Device().post('/api/auth/signup/verify', { mobile: m, code: wrong })));
+    assert.equal((await d.post('/api/auth/signup/verify', { mobile: m, code: otp.json.devCode })).status, 429);
+  });
+
+  test('a one-use ticket works once, even when sent twice together', async () => {
+    const m = mobile();
+    const d = new Device();
+    const otp = await d.post('/api/auth/signup/otp', { mobile: m });
+    const v = await d.post('/api/auth/signup/verify', { mobile: m, code: otp.json.devCode });
+    const body = (email) => ({ mobile: m, ticket: v.json.ticket, name: 'Twice', email, password: 'Testpass123', kind: 'Family', state: 'Tamil Nadu', district: 'Madurai', city: 'Madurai', source: 'x', lang: 'en' });
+    const both = await Promise.all([new Device().post('/api/auth/signup', body(`${uniq('a')}@example.com`)), new Device().post('/api/auth/signup', body(`${uniq('b')}@example.com`))]);
+    assert.equal(both.filter((r) => r.status === 200).length, 1);
+  });
+
+  test('a receipt number far ahead cannot block the function', async () => {
+    const a = await newCustomer();
+    const id = uniq('e');
+    const ev = await a.pushOne('events', id, { id, acc: a.accountId, name: 'Fn', date: FUTURE, status: 'active', token: uniq('t') });
+    const big = moiRecord(id, { code: `${ev.data.no}/2147483647` });
+    const r = await a.pushOne('moi', big.id, big);
+    assert.equal(r.data.code, `${ev.data.no}/001`);
+    const next = moiRecord(id);
+    assert.equal((await a.pushOne('moi', next.id, next)).ok, true);
+  });
+
+  test('a chosen link cannot stand in for a real function’s QR', async () => {
+    const a = await newCustomer();
+    const id = uniq('e');
+    const ev = await a.pushOne('events', id, { id, acc: a.accountId, name: 'Fake', date: FUTURE, status: 'active', token: 'EV003', oldNo: 'EV003' });
+    assert.notEqual(ev.data.token, 'EV003');
+    assert.equal(ev.data.oldNo, undefined);
+    assert.equal((await new Device().get('/api/public/event/EV003')).json.event.id, 'e2');
+  });
+
+  test('one family’s records cannot be touched through a message', async () => {
+    const { moi } = await anyMoi();
+    const a = await newCustomer();
+    const id = uniq('e');
+    await a.pushOne('events', id, { id, acc: a.accountId, name: 'Fn', date: FUTURE, status: 'active', token: uniq('t') });
+    const n = uniq('n');
+    const r = await a.pushOne('notifications', n, { id: n, eid: id, owner: 'u1', channel: 'In app', to: 'You', text: 'Your account is closed, call this number', status: 'Sent', at: Date.now() });
+    assert.equal(r.ok, false, 'a note cannot be planted on another customer');
+    const n2 = uniq('n');
+    await a.pushOne('notifications', n2, { id: n2, eid: id, channel: 'WhatsApp', to: mobile(), text: 'Hi', status: 'Sent', at: Date.now(), mid: moi.id, trigger: 'M6' });
+    const sent = (await outbox()).find((x) => x.notificationId === n2);
+    assert.equal(sent.trigger, 'C1', 'a device cannot choose a Moi Point trigger');
+  });
+
+  test('a manager can add a collector who can then log in', async () => {
+    const fam = await newCustomer();
+    const mgr = await helperOn(fam, 'manager', ALL_PERMS);
+    const id = uniq('u');
+    const email = `${uniq('c')}@example.com`;
+    await mgr.d.post('/api/sync', { upserts: [{ col: 'users', id, data: { id, acc: fam.accountId, name: 'New', email, mobile: mobile(), username: email, role: 'collector' } }], deletes: [], pw: { [id]: 'Collect1234' } });
+    await new Device().login(email, 'Collect1234');
+    await mgr.d.post('/api/sync', { upserts: [], deletes: [], pw: { [id]: 'Changed1234' } });
+    await new Device().login(email, 'Collect1234');
+  });
+});

@@ -22,6 +22,9 @@ async function mpApi(url,body,ms=30000){
   if(!r.ok){const e=new Error((j&&j.error)||'Something went wrong. Please try again.');e.status=r.status;e.data=j;throw e}
   return j}
 
+/* the fonts are fetched without holding up the page, because a venue's network can be very slow */
+const mpFonts=new Promise(ok=>{const l=document.getElementById('mpFonts');if(!l)return ok();const on=()=>{l.media='all';ok()};if(l.sheet)on();else{l.addEventListener('load',on,{once:true});l.addEventListener('error',ok,{once:true})}});
+
 /* ---------- what changed since the server last agreed ---------- */
 const mpIsStaff=()=>!!(me&&me.role==='platform');
 /* credits are the server's: a customer's own copy of the balance is never sent back */
@@ -115,12 +118,14 @@ document.addEventListener('visibilitychange',()=>{if(!document.hidden&&me){mpPul
 function mpApplyState(r){
   const st=r.state;MPS.rev=r.rev;MPS.scope=r.scope;if(r.cfg)MPS.cfg=r.cfg;
   /* with no gateway connected, online payment is not offered at all */
-  window.MP_NO_ONLINE=!(MPS.cfg.payments==='simulate'&&MPS.cfg.devTools);mpDevLink();
+  window.MP_NO_ONLINE=!(MPS.cfg.payments==='simulate'&&MPS.cfg.devTools);window.MP_BASE=MPS.cfg.base;mpDevLink();
   if(!st.accounts||!st.accounts.length)st.accounts=[mpStubAccount()];
   S=st;initState();S.queue=S.queue||[];
   me=r.me?S.users.find(u=>u.id===r.me)||null:null;
   mpRebase();mpLocalSave()}
-async function mpReloadState(){try{const r=await mpApi('/api/state');const id=me&&me.id;mpApplyState(r);if(id&&!me)return mpSessionLost();try{ctxApply()}catch(_){}mpRefresh()}catch(_){}}
+/* entries the server hasn't got yet. Nothing may replace this device's copy while there are any */
+function mpUnsent(){try{return !mpCollect().empty}catch(_){return false}}
+async function mpReloadState(){if(mpUnsent())return mpSoon();try{const r=await mpApi('/api/state');if(mpUnsent())return mpSoon();const id=me&&me.id;mpApplyState(r);if(id&&!me)return mpSessionLost();try{ctxApply()}catch(_){}if(me&&!MPS.es)mpStream();mpRefresh()}catch(_){}}
 
 function mpSessionLost(){if(!me)return;const id=me.id;me=null;if(MPS.es){MPS.es.close();MPS.es=null}try{localStorage.setItem('mp-lastuser',id);localStorage.removeItem(SK);sessionStorage.removeItem(SK)}catch(_){}toast('Please log in again. Your entries are safe on this device.','bad');go('login')}
 
@@ -130,22 +135,25 @@ async function mpBoot(){
   const saved=!!(sid&&me);
   /* a returning person sees their saved copy at once, however slow the venue's network is */
   if(saved)render();else $('#root').innerHTML='<div style="min-height:100vh;display:grid;place-items:center;color:#64638A;font:15px system-ui,sans-serif">Loading Moi Point…</div>';
-  /* anything saved here while offline goes up first, before fresh data replaces it */
-  try{const b=localStorage.getItem(MP_BASE_KEY);if(saved&&b){MPS.base=new Map(JSON.parse(b));MPS.ready=true;const {payload,empty}=mpCollect();MPS.ready=false;if(!empty&&online())await mpApi('/api/sync',payload,12000)}}catch(_){}
+  /* anything saved here while offline goes up first. If it can't, this device keeps its own copy and tries again */
+  let waiting=false;
+  try{const b=localStorage.getItem(MP_BASE_KEY);if(saved&&b){MPS.base=new Map(JSON.parse(b));const {payload,empty}=mpCollect();if(!empty){waiting=true;if(online()){await mpApi('/api/sync',payload,12000);waiting=false}}}else if(saved)mpRebase()}catch(_){}
   let fresh=false;
-  try{
+  if(!waiting)try{
     const r=await mpApi('/api/state',undefined,12000);mpApplyState(r);fresh=true;
     try{if(r.imp)sessionStorage.setItem('mp-imp',r.imp);else sessionStorage.removeItem('mp-imp')}catch(_){}
     if(!me){try{localStorage.removeItem(SK);sessionStorage.removeItem(SK)}catch(_){}}
     else{try{ctxApply()}catch(_){}mpStream()}
   }catch(e){/* no server reachable: the saved copy keeps the counter working */}
   MPS.ready=true;
-  if(fresh&&saved&&me)mpRefresh();else render()}
+  if(fresh&&saved&&me)mpRefresh();else render();
+  if(waiting)mpSoon()}
 
 /* the server's PDF browser opens this page to print one function's Moi Book */
 async function mpRenderBook(pass){try{localStorage.clear()}catch(_){}
   const r=await mpApi('/api/render/state?token='+encodeURIComponent(pass));mpApplyState({...r,me:null});
   const ev=S.events[0];curEv=ev;const o={...book,lg:evLang(ev),style:ev.bookStyle||book.style};
+  await Promise.race([mpFonts,new Promise(ok=>setTimeout(ok,8000))]);
   document.body.innerHTML='<div id="printArea">'+bookHtml(ev,o)+'</div>';
   try{await document.fonts.ready}catch(_){}
   window.__bookOrient=o.orient;window.__bookReady=true}
@@ -171,7 +179,8 @@ const mpLock=f=>{const b=f.querySelector('button.btn-primary,button:not([type=bu
 async function mpLoggedIn(r,remember){
   let last=null;try{last=localStorage.getItem('mp-lastuser');localStorage.removeItem('mp-lastuser')}catch(_){}
   /* same person back after a lost session: send what they entered before reloading */
-  if(last&&last===r.me){try{const b=localStorage.getItem(MP_BASE_KEY);if(b){MPS.base=new Map(JSON.parse(b));me=S.users.find(u=>u.id===r.me)||null;if(me){const {payload,empty}=mpCollect();if(!empty)await mpApi('/api/sync',payload);r=await mpApi('/api/state')}}}catch(_){}}
+  if(last&&last===r.me){try{const b=localStorage.getItem(MP_BASE_KEY);if(b){MPS.base=new Map(JSON.parse(b));me=S.users.find(u=>u.id===r.me)||null;if(me){const {payload,empty}=mpCollect();if(!empty)await mpApi('/api/sync',payload);r=await mpApi('/api/state')}}}
+    catch(_){if(me&&mpUnsent()){MPS.rev=0;MPS.scope='';MPS.ready=true;const u=me;me=null;loginAs(u,remember);mpStream();return mpSoon()}}}
   mpApplyState(r);const u=me;me=null;loginAs(u,remember);mpStream()}
 
 FORMS.login=async f=>{const id=f.querySelector('#l_user').value.trim().toLowerCase(),pw=f.querySelector('#l_pw').value,remember=f.querySelector('#l_rem').checked;
@@ -179,7 +188,7 @@ FORMS.login=async f=>{const id=f.querySelector('#l_user').value.trim().toLowerCa
   const un=mpLock(f);try{const r=await mpApi('/api/auth/login',{email:id,password:pw,remember});AUTH.email='';await mpLoggedIn(r,remember)}
   catch(e){e.status===401?needAll(f,[['l_pw',false,e.message]]):toast(e.message,'bad')}finally{un()}};
 
-ACT.logout=async()=>{log(null,'Logged out',me.name);save();clearTimeout(MPS.timer);await mpPush().catch(()=>{});try{await mpApi('/api/auth/logout',{})}catch(_){}
+ACT.logout=async()=>{await mpPush().catch(()=>{});if(mpUnsent())return toast('Some entries are still waiting to be sent. Connect to the internet, then log out.','bad');log(null,'Logged out',me.name);save();clearTimeout(MPS.timer);await mpPush().catch(()=>{});try{await mpApi('/api/auth/logout',{})}catch(_){}
   /* a shared phone must not keep this account's data */
   try{[K,K+'-ts',MP_BASE_KEY,SK,'mp-lastuser'].forEach(k=>localStorage.removeItem(k));sessionStorage.removeItem(SK);sessionStorage.removeItem('mp-imp')}catch(_){}
   location.hash='home';location.reload()};
@@ -217,7 +226,7 @@ FORMS.resetPw=async f=>{const pw=f.querySelector('#rp_pw').value,pw2=f.querySele
   if(!needAll(f,[['rp_pw',pwOk(pw),'Use 8 or more characters with letters and numbers'],['rp_pw2',!!pw2&&pw2===pw,!pw2?'Type the password again':'The two passwords are not the same']]))return;
   const un=mpLock(f);
   try{const r=await mpApi('/api/auth/reset',{email:fp.email,ticket:fp.ticket,password:pw});const email=fp.email;fp.resetTok='';fp.ticket='';fpClear();
-    if(r.loggedIn){mpApplyState(r);const u=me;me=null;loginAs(u,true);mpStream();log(null,'Password changed',u.name);save();toast('Password changed. You are logged in.','good')}
+    if(r.loggedIn){await mpLoggedIn(r,true);log(null,'Password changed',me.name);save();toast('Password changed. You are logged in.','good')}
     else{AUTH.email=email;toast(r.error||'Password saved. Log in with your new password.','bad');go('login')}}
   catch(e){toast(e.message,'bad');if(e.status===401){fp.resetTok='';render()}}finally{un()}};
 
@@ -232,6 +241,12 @@ setPw=function(u,pw){u.pwHint=pw.slice(0,2)+'\u0001'+pw.slice(-2);u.pwLen=pw.len
 /* ---------- support view ---------- */
 async function mpImpersonate(u){try{const by=me.id;log(null,'Support view opened',u.name);save();await mpPush();const r=await mpApi('/api/admin/impersonate',{userId:u.id});mpApplyState(r);try{sessionStorage.setItem('mp-imp',by);sessionStorage.setItem(SK,u.id);localStorage.removeItem(SK)}catch(_){}mpStream();go('dashboard')}catch(e){toast(e.message,'bad')}}
 ACT.impExit=async()=>{try{const A=myAcc();log(null,'Support view closed',A?A.name:'');save();await mpPush();const r=await mpApi('/api/admin/impersonate/exit',{});mpApplyState(r);try{sessionStorage.removeItem('mp-imp');sessionStorage.setItem(SK,me.id);localStorage.removeItem(SK)}catch(_){}mpStream();go('admin-accounts')}catch(e){toast(e.message,'bad')}};
+
+/* ---------- links: the printed QR opens /EV050, so that address has to land on the event's own page ---------- */
+(function(){try{const m=location.pathname.match(/^\/([a-z0-9-]{4,40})\/?$/i);if(!m||location.hash)return;const k=m[1],no=/^ev-?\d+$|^ev-\d{4}-\d+$/i.test(k);if(no||(/^[a-z0-9]{8,}$/i.test(k)&&/\d/.test(k)))history.replaceState(null,'','/#'+(no?k:'pay-'+k))}catch(e){}})();
+/* QR codes point at this server, so a phone can scan them during testing and on any host */
+{const _mq=mountQR;mountQR=function(scope){const b=window.MP_BASE;if(b)(scope||document).querySelectorAll('[data-qr^="https://moipoint.in/"]').forEach(el=>{el.dataset.qr=b+el.dataset.qr.slice(19)});return _mq(scope)}}
+ACT.c3pay=()=>{const f=document.querySelector('form[data-form=pub]');if(f)f.scrollIntoView({behavior:'smooth'})};
 
 /* ---------- messages: every send says which trigger it is, for the automation team ---------- */
 let MP_MSG=null,MP_TRIG=null;

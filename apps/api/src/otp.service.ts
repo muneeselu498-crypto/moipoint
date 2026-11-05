@@ -18,31 +18,37 @@ export class OtpService {
   constructor(private prisma: PrismaService) {}
 
   async issue(purpose: OtpPurpose, target: string, scope = ''): Promise<string> {
-    const recent = await this.prisma.otpCode.findMany({
-      where: { purpose, target, scope, createdAt: { gte: new Date(Date.now() - 3600e3) } },
-      orderBy: { createdAt: 'desc' },
+    return this.prisma.$transaction(async (tx) => {
+      // one at a time per number, so a burst of requests can't slip past the limits
+      await tx.$executeRaw`SELECT pg_advisory_xact_lock(hashtext(${`${purpose}:${target}:${scope}`}))`;
+      const recent = await tx.otpCode.findMany({
+        where: { purpose, target, scope, createdAt: { gte: new Date(Date.now() - 3600e3) } },
+        orderBy: { createdAt: 'desc' },
+      });
+      if (recent.length >= SENDS_PER_HOUR[purpose]) fail('Too many codes. Please try again after some time.', 429);
+      const gap = recent[0] ? (Date.now() - recent[0].createdAt.getTime()) / 1000 : Infinity;
+      if (gap < RESEND_SECONDS) fail(`Please wait ${Math.ceil(RESEND_SECONDS - gap)} seconds before asking for a new code.`, 429);
+      const code = otpCode();
+      await tx.otpCode.create({
+        data: { purpose, target, scope, codeHash: hashCode(purpose, target, code), expiresAt: new Date(Date.now() + CODE_MINUTES * 60e3) },
+      });
+      return code;
     });
-    if (recent.length >= SENDS_PER_HOUR[purpose]) fail('Too many codes. Please try again after some time.', 429);
-    const gap = recent[0] ? (Date.now() - recent[0].createdAt.getTime()) / 1000 : Infinity;
-    if (gap < RESEND_SECONDS) fail(`Please wait ${Math.ceil(RESEND_SECONDS - gap)} seconds before asking for a new code.`, 429);
-    const code = otpCode();
-    await this.prisma.otpCode.create({
-      data: { purpose, target, scope, codeHash: hashCode(purpose, target, code), expiresAt: new Date(Date.now() + CODE_MINUTES * 60e3) },
-    });
-    return code;
   }
 
   /** Checks a code and returns a one-use ticket that proves the next step is allowed. */
   async check(purpose: OtpPurpose, target: string, scope: string, code: string): Promise<string> {
     const row = await this.prisma.otpCode.findFirst({ where: { purpose, target, scope }, orderBy: { createdAt: 'desc' } });
     if (!row || row.verifiedAt || row.expiresAt < new Date()) return fail('This code expired. Tap Resend code.');
-    if (row.tries >= MAX_TRIES) return fail('Too many wrong tries. Tap Resend code.', 429);
+    // each try is counted before the code is compared, so guesses sent together still count
+    const counted = await this.prisma.otpCode.updateMany({ where: { id: row.id, tries: { lt: MAX_TRIES }, verifiedAt: null }, data: { tries: { increment: 1 } } });
+    if (!counted.count) return fail('Too many wrong tries. Tap Resend code.', 429);
     if (row.codeHash !== hashCode(purpose, target, code)) {
-      await this.prisma.otpCode.update({ where: { id: row.id }, data: { tries: { increment: 1 } } });
       return fail(row.tries + 1 >= MAX_TRIES ? 'Too many wrong tries. Tap Resend code.' : 'That code is not right. Check the latest SMS.');
     }
     const ticket = randomToken(24);
-    await this.prisma.otpCode.update({ where: { id: row.id }, data: { verifiedAt: new Date(), ticketHash: sha256(ticket) } });
+    const won = await this.prisma.otpCode.updateMany({ where: { id: row.id, verifiedAt: null }, data: { verifiedAt: new Date(), ticketHash: sha256(ticket) } });
+    if (!won.count) return fail('This code expired. Tap Resend code.');
     return ticket;
   }
 
@@ -52,7 +58,8 @@ export class OtpService {
     if (!row || !row.verifiedAt || Date.now() - row.verifiedAt.getTime() > TICKET_MINUTES * 60e3) {
       fail('This step has expired. Please start again.', 401);
     }
-    await this.prisma.otpCode.update({ where: { id: row!.id }, data: { usedAt: new Date() } });
+    const used = await this.prisma.otpCode.updateMany({ where: { id: row!.id, usedAt: null }, data: { usedAt: new Date() } });
+    if (!used.count) fail('This step has expired. Please start again.', 401);
   }
 
   /** For repeat use within a session, such as several QR entries from one confirmed mobile. */

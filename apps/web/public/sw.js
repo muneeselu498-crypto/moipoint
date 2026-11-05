@@ -1,8 +1,8 @@
 /* Moi Point service worker: keeps the web app working without internet.
    Put this file next to index.html on moipoint.in (same folder). */
-const CACHE='moipoint-v70';
+const CACHE='moipoint-v71';
 const SHELL=['./','./index.html','./manifest.webmanifest','./icon-192.png','./icon-512.png',
-  'https://cdnjs.cloudflare.com/ajax/libs/qrcodejs/1.0.0/qrcode.min.js'];
+  './vendor/qrcode.min.js'];
 self.addEventListener('install',e=>{e.waitUntil(caches.open(CACHE).then(c=>Promise.all(SHELL.map(u=>c.add(new Request(u,{mode:u.startsWith('http')?'no-cors':'same-origin'})).catch(()=>{})))).then(()=>self.skipWaiting()))});
 self.addEventListener('activate',e=>{e.waitUntil(caches.keys().then(ks=>Promise.all(ks.filter(k=>k!==CACHE).map(k=>caches.delete(k)))).then(()=>self.clients.claim()))});
 self.addEventListener('fetch',e=>{const r=e.request;if(r.method!=='GET')return;

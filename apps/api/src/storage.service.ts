@@ -7,6 +7,13 @@ import { sha256 } from './util';
 const DATA_URL = /^data:(image\/(png|jpeg|jpg|webp|gif)|video\/mp4|application\/pdf);base64,/;
 const EXT: Record<string, string> = { 'image/png': 'png', 'image/jpeg': 'jpg', 'image/jpg': 'jpg', 'image/webp': 'webp', 'image/gif': 'gif', 'video/mp4': 'mp4', 'application/pdf': 'pdf' };
 
+/** Fields the screens put straight into an image or video address. */
+const ADDRESS_KEYS = new Set(['shot', 'logo', 'photo', 'proof', 'img', 'img2', 'image', 'receipt', 'qr', 'src', 'video']);
+/** None of these can appear in a real address, and any of them could break out of the page's markup. */
+const UNSAFE = /["'<>`\\\s]/;
+
+export const isDataImage = (v: string) => /^data:image\/(png|jpeg|jpg|webp|gif);base64,[A-Za-z0-9+/=]+$/.test(v);
+
 /**
  * The screens keep photos as long text inside records. Stored that way the database would
  * balloon, so pictures are written to files and the record keeps a short link instead.
@@ -35,7 +42,7 @@ export class StorageService {
     if (Array.isArray(value)) return value.map((v) => this.externalize(v)) as unknown as T;
     if (value && typeof value === 'object') {
       const out: any = {};
-      for (const [k, v] of Object.entries(value)) out[k] = this.externalize(v);
+      for (const [k, v] of Object.entries(value)) out[k] = typeof v === 'string' && ADDRESS_KEYS.has(k) && UNSAFE.test(v) ? null : this.externalize(v);
       return out;
     }
     return value;

@@ -11,6 +11,8 @@ export interface Scope {
   ownerOf: string[];
   /** Every account they can see any part of. */
   accountIds: string[];
+  /** Accounts they work in right now. A removed helper keeps their own login, but not the family's guests. */
+  liveAccountIds: string[];
   /** Every event they can see. */
   eventIds: string[];
   /** Events they help on in someone's account, with their role and permissions there. */
@@ -19,7 +21,7 @@ export interface Scope {
   key: string;
 }
 
-export const ANON: Scope = { kind: 'anon', userId: null, user: null, ownerOf: [], accountIds: [], eventIds: [], helperOn: {}, key: 'anon' };
+export const ANON: Scope = { kind: 'anon', userId: null, user: null, ownerOf: [], accountIds: [], liveAccountIds: [], eventIds: [], helperOn: {}, key: 'anon' };
 
 /** Same defaults as the screens: an Event Admin may do almost everything, a Moi Collector only receives Moi. */
 export function permDef(role: string) {
@@ -49,18 +51,21 @@ export class ScopeService {
   async forUser(user: any): Promise<Scope> {
     if (!user) return ANON;
     if (user.role === 'platform') {
-      return { kind: 'platform', userId: user.id, user, ownerOf: [], accountIds: [], eventIds: [], helperOn: {}, key: `p:${user.id}` };
+      return { kind: 'platform', userId: user.id, user, ownerOf: [], accountIds: [], liveAccountIds: [], eventIds: [], helperOn: {}, key: `p:${user.id}` };
     }
     const ownerOf = user.role === 'admin' && user.accountId ? [user.accountId] : [];
     const links = await this.prisma.eventUser.findMany({ where: { userId: user.id, deleted: false } });
     const linkedEvents = links.length
       ? await this.prisma.event.findMany({ where: { id: { in: links.map((l) => l.eventId) }, deleted: false } })
       : [];
+    const paused = linkedEvents.length
+      ? new Set((await this.prisma.account.findMany({ where: { id: { in: linkedEvents.map((e) => e.accountId) }, status: 'suspended' }, select: { id: true } })).map((a) => a.id))
+      : new Set<string>();
     const helperOn: Scope['helperOn'] = {};
     for (const l of links) {
       const ev = linkedEvents.find((e) => e.id === l.eventId);
       const d = l.data as any;
-      if (ev && inAccessWindow(d.access, ev.date)) {
+      if (ev && !paused.has(ev.accountId) && inAccessWindow(d.access, ev.date)) {
         helperOn[l.eventId] = { role: l.role, perm: { ...permDef(l.role), ...(d.perm || {}) }, accountId: ev.accountId };
       }
     }
@@ -68,10 +73,9 @@ export class ScopeService {
       ? await this.prisma.event.findMany({ where: { accountId: { in: ownerOf }, deleted: false }, select: { id: true } })
       : [];
     const eventIds = [...new Set([...owned.map((e) => e.id), ...Object.keys(helperOn)])];
-    const accountIds = [
-      ...new Set([...ownerOf, ...Object.values(helperOn).map((h) => h.accountId), ...(user.accountId ? [user.accountId] : [])]),
-    ];
-    const key = sha256([user.id, user.role, ...ownerOf, '|', ...accountIds.slice().sort(), '|', ...eventIds.slice().sort()].join(','));
-    return { kind: 'tenant', userId: user.id, user, ownerOf, accountIds, eventIds, helperOn, key };
+    const liveAccountIds = [...new Set([...ownerOf, ...Object.values(helperOn).map((h) => h.accountId)])];
+    const accountIds = [...new Set([...liveAccountIds, ...(user.accountId ? [user.accountId] : [])])];
+    const key = sha256([user.id, user.role, ...ownerOf, '|', ...accountIds.slice().sort(), '|', ...liveAccountIds.slice().sort(), '|', ...eventIds.slice().sort()].join(','));
+    return { kind: 'tenant', userId: user.id, user, ownerOf, accountIds, liveAccountIds, eventIds, helperOn, key };
   }
 }

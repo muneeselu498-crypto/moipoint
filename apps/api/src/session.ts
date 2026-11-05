@@ -42,13 +42,20 @@ export class SessionService {
 export class SessionMiddleware implements NestMiddleware {
   constructor(private prisma: PrismaService, private scopes: ScopeService) {}
 
+  /** A paused account stops working at once, not just at the next login. Staff in support view can still look. */
+  private async paused(row: any) {
+    if (row.user.role === 'platform' || !row.user.accountId || row.impersonatorId) return false;
+    const a = await this.prisma.account.findUnique({ where: { id: row.user.accountId }, select: { status: true } });
+    return a?.status === 'suspended';
+  }
+
   async use(req: AuthedRequest, _res: Response, next: NextFunction) {
     req.scope = ANON;
     req.sessionRow = null;
     const token = req.cookies?.[COOKIE];
     if (token) {
       const row = await this.prisma.session.findUnique({ where: { tokenHash: sha256(token) }, include: { user: true } });
-      if (row && row.expiresAt > new Date() && row.user.status === 'active' && !row.user.deleted) {
+      if (row && row.expiresAt > new Date() && row.user.status === 'active' && !row.user.deleted && !(await this.paused(row))) {
         req.sessionRow = row;
         req.scope = await this.scopes.forUser(row.user);
       }

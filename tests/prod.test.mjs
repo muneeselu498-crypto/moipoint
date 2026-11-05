@@ -1,15 +1,17 @@
 // The same app with testing tools off, as it would run on a real server, connected to a stand-in provider.
 import { PrismaClient } from '@prisma/client';
 import assert from 'node:assert/strict';
-import { execFileSync } from 'node:child_process';
+import { execFile } from 'node:child_process';
 import http from 'node:http';
 import { after, before, describe, test } from 'node:test';
+import { promisify } from 'node:util';
 import { chromium } from 'playwright-core';
 
 const BASE = process.env.PROD_BASE;
 const post = (path, body, cookie = '') =>
   fetch(BASE + path, { method: 'POST', headers: { 'content-type': 'application/json', 'x-moipoint': '1', ...(cookie ? { cookie } : {}) }, body: JSON.stringify(body) });
 
+const run = promisify(execFile);
 const SECRET = 'test-secret';
 const db = new PrismaClient({ datasourceUrl: process.env.PROD_DATABASE_URL });
 
@@ -161,14 +163,14 @@ describe('with testing tools off', () => {
     const ctx = await browser.newContext({ serviceWorkers: 'block' });
     await ctx.addInitScript(() => { try { localStorage.setItem('moipoint-state', 'Tamil Nadu'); } catch { /* blocked */ } });
     const p = await ctx.newPage();
-    await p.goto(`${BASE}/#login`, { waitUntil: 'load' });
+    await p.goto(`${BASE}/#login`, { waitUntil: 'domcontentloaded' });
     await p.waitForSelector('#l_user');
     const text = await p.evaluate(() => document.body.innerText);
     assert.ok(!text.includes('Demo accounts'));
     assert.ok(!text.includes('master@moipoint.in'));
     assert.equal(await p.locator('#mpDev').count(), 0);
-    await p.goto(`${BASE}/#EV003`, { waitUntil: 'load' });
-    await p.reload({ waitUntil: 'load' });
+    await p.goto(`${BASE}/#EV003`, { waitUntil: 'domcontentloaded' });
+    await p.reload({ waitUntil: 'domcontentloaded' });
     await p.waitForSelector('form[data-form=pub]');
     const modes = await p.locator('[data-act=mode]').allTextContents();
     assert.ok(!modes.join(' ').includes('Online'), `offered: ${modes}`);
@@ -178,16 +180,16 @@ describe('with testing tools off', () => {
   test('a real install gets its first Master Admin from one command', async () => {
     const email = `first${Date.now()}@example.com`;
     const args = ['run', '--silent', 'admin:create', '--', 'FirstAdmin', email, number()];
-    const env = { ...process.env, DATABASE_URL: process.env.PROD_DATABASE_URL };
-    const out = execFileSync('npm', args, { env, encoding: 'utf8', shell: process.platform === 'win32' });
-    const password = out.match(/Password: (\S+)/)[1];
+    const opts = { env: { ...process.env, DATABASE_URL: process.env.PROD_DATABASE_URL }, shell: process.platform === 'win32' };
+    const { stdout } = await run('npm', args, opts);
+    const password = stdout.match(/Password: (\S+)/)[1];
     const r = await post('/api/auth/login', { email, password });
     assert.equal(r.status, 200);
     const { state, me } = await r.json();
     const u = state.users.find((x) => x.id === me);
     assert.equal(u.role, 'platform');
     assert.equal(u.prole, 'owner');
-    assert.throws(() => execFileSync('npm', args, { env, stdio: 'ignore', shell: process.platform === 'win32' }), 'the same email twice must be refused');
+    await assert.rejects(run('npm', args, opts), 'the same email twice must be refused');
   });
 
   test('the website still opens for a visitor', async () => {
@@ -195,7 +197,7 @@ describe('with testing tools off', () => {
     const p = await ctx.newPage();
     const errors = [];
     p.on('pageerror', (e) => errors.push(e.message));
-    await p.goto(`${BASE}/`, { waitUntil: 'load' });
+    await p.goto(`${BASE}/`, { waitUntil: 'domcontentloaded' });
     await p.waitForTimeout(800);
     assert.deepEqual(errors, []);
     await ctx.close();
