@@ -108,6 +108,7 @@ The server treats every browser as untrusted. It decides who sees what (`whereFo
 ```
 npm test             everything
 npm run test:api     server rules only
+npm run test:tenant  each family sealed off from every other
 npm run test:ui      real browser tests only
 npm run test:prod    testing tools off and a stand-in provider, as on a real server
 ```

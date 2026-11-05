@@ -55,8 +55,8 @@ for (let i = 0; i < 60; i++) {
 }
 
 const which = process.argv[2];
-const sets = { api: ['tests/api.test.mjs'], ui: ['tests/ui.test.mjs'], prod: ['tests/prod.test.mjs'] };
-const files = sets[which] ?? [...sets.api, ...sets.ui, ...sets.prod];
+const sets = { api: ['tests/api.test.mjs'], tenant: ['tests/tenant.test.mjs'], ui: ['tests/ui.test.mjs'], prod: ['tests/prod.test.mjs'] };
+const files = sets[which] ?? [...sets.api, ...sets.tenant, ...sets.ui, ...sets.prod];
 const only = process.argv[3] ? [`--test-name-pattern=${process.argv[3]}`] : [];
 const run = spawnSync('node', ['--test', '--test-concurrency=1', ...only, ...files], { cwd: root, env: { ...env, BASE: `http://localhost:${PORT}`, PROD_BASE: `http://localhost:${PROD_PORT}`, PROD_DATABASE_URL: prodUrl, PROVIDER_PORT: String(PROVIDER_PORT) }, stdio: 'inherit' });
 stop();
