@@ -9,9 +9,15 @@ import { fileURLToPath } from 'node:url';
 import { buildHtml } from './build.mjs';
 
 const here = path.dirname(fileURLToPath(import.meta.url));
-const api = String(process.env.API_ORIGIN || '').replace(/\/+$/, '');
+const raw = process.env.API_ORIGIN;
+const api = String(raw || '').trim().replace(/\/+$/, '');
+if (!raw) {
+  console.error('API_ORIGIN is not set for this build. In Vercel: Settings → Environment Variables → add API_ORIGIN = https://api.moipoint.in for Production and Preview, then redeploy.');
+  process.exit(1);
+}
+// passwords travel from Vercel to the server, so the server must be on https, with just its address and no path
 if (!/^https:\/\/[^/\s]+$/.test(api)) {
-  console.error('Set API_ORIGIN to the Moi Point server, for example https://api.moipoint.in');
+  console.error(`API_ORIGIN is "${raw}", but it must be the server's https address only, like https://api.moipoint.in (no http, no IP:port, no /api at the end).`);
   process.exit(1);
 }
 
