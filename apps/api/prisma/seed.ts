@@ -29,8 +29,8 @@ const EXPORTED = Date.UTC(2026, 10, 4);
 function moved(v: any, days: number): any {
   if (typeof v === 'number') return v > 1.6e12 && v < 2.1e12 ? v + days * DAY : v;
   if (typeof v === 'string') {
-    if (/^d{4}-d{2}-d{2}$/.test(v)) return new Date(Date.parse(v) + days * DAY).toISOString().slice(0, 10);
-    if (/^d{4}-d{2}-d{2}T/.test(v)) return new Date(Date.parse(v) + days * DAY).toISOString();
+    if (/^\d{4}-\d{2}-\d{2}$/.test(v)) return new Date(Date.parse(v) + days * DAY).toISOString().slice(0, 10);
+    if (/^\d{4}-\d{2}-\d{2}T/.test(v)) return new Date(Date.parse(v) + days * DAY).toISOString();
     return v;
   }
   if (Array.isArray(v)) return v.map((x) => moved(x, days));

@@ -657,6 +657,16 @@ describe('robustness', () => {
   });
 });
 
+describe('demo data', () => {
+  test('its dates follow today, so the upcoming function stays upcoming', async () => {
+    const { state } = (await owner()).state;
+    const gap = (d) => (Date.parse(d) - Date.now()) / 86400000;
+    assert.ok(Math.abs(gap(state.events.find((e) => e.id === 'e2').date) - 10) < 2.5, 'the demo function is about ten days away');
+    const moi = state.moi.find((m) => m.event_id === 'e1');
+    assert.ok(Math.abs(gap(moi.date) - (moi.created_at - Date.now()) / 86400000) < 2, 'dates and times move together');
+  });
+});
+
 describe('attacks from the security review', () => {
   const ALL_PERMS = { list: 1, edit: 1, void: 1, exp: 1, pay: 1, verify: 1, rep: 1, out: 0 };
   const anyMoi = async () => {
