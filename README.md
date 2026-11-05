@@ -86,6 +86,12 @@ A real install starts with no logins. Add the first Master Admin with the comman
 npm run admin:create -- "Full Name" name@example.com 9876543210
 ```
 
+## Deploying
+
+Simplest: put everything on one server. The server already delivers the page and the data from one address.
+
+With the page on Vercel and the server on a VPS, the server answers on its own address, for example `api.moipoint.in`, and Vercel passes `/api` and `/uploads` on to it, so the browser still sees one address. In Vercel, set the root directory to `apps/web`, the build command to `node vercel-build.mjs`, and the environment variable `API_ORIGIN=https://api.moipoint.in`. On the server, set `PUBLIC_URL` to the Vercel address and `TRUST_PROXY=2`. The server still builds the page too, because it prints the Moi Book PDF from it.
+
 ## How it works
 
 ```

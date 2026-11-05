@@ -20,7 +20,8 @@
     "db:stop": "node scripts/db.mjs stop",
     "test:prod": "node scripts/test.mjs prod",
     "admin:create": "cd apps/api && npx ts-node --transpile-only prisma/create-admin.ts",
-    "test:tenant": "node scripts/test.mjs tenant"
+    "test:tenant": "node scripts/test.mjs tenant",
+    "build:vercel": "node apps/web/vercel-build.mjs"
   },
   "devDependencies": {
     "playwright-core": "^1.64.1"
