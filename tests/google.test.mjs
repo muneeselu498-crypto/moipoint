@@ -58,6 +58,49 @@ describe('Google sign-in on the server', () => {
     assert.equal((await d.get('/api/state')).json.me, null);
   });
 
+  /** Your details, as the sign-up form sends them. */
+  const details = (over = {}) => ({ name: 'Google Owner', mobile: mobile(), kind: 'Family', state: 'Tamil Nadu', district: 'Madurai', city: 'Madurai', source: 'Friend referral', lang: 'en', ...over });
+
+  test('a new Google account creates its own family account from Your details, with no mobile code', async () => {
+    const email = `${uniq('gnew')}@gmail.com`;
+    const d = new Device();
+    const r = await d.post('/api/auth/google/signup', { idToken: googleToken(email), ...details() });
+    assert.equal(r.status, 200, r.text);
+    const me = meOf(r);
+    assert.equal(me.email, email, 'the email is the one Google proved');
+    assert.equal(me.role, 'admin', 'an Owner of their own account, not staff');
+    assert.equal(r.json.state.accounts.length, 1, 'a brand-new account of their own');
+    assert.equal(r.json.state.accounts[0].owner, me.id);
+    assert.equal(r.json.state.events.length, 0, 'nobody else’s functions');
+    assert.equal((await d.get('/api/state')).json.me, me.id, 'signed in straight away');
+    const back = await google(googleToken(email));
+    assert.equal(back.json.me, me.id, 'next time, Continue with Google opens the same account');
+  });
+
+  test('Google sign-up refuses what it should', async () => {
+    const taken = await newCustomer('Taken Family');
+    const cases = {
+      'an email that already has a login': [googleToken(taken.email), details(), 409],
+      'a mobile another login already uses': [googleToken(`${uniq('m')}@gmail.com`), details({ mobile: taken.mobile }), 409],
+      'the Master Admin email': [googleToken(MASTER_EMAIL), details(), 409],
+      'an email Google has not verified': [googleToken(`${uniq('u')}@gmail.com`, { email_verified: false }), details(), 403],
+      'a token Google did not sign': [googleToken(`${uniq('f')}@gmail.com`, {}, otherKey()), details(), 401],
+      'missing details': [googleToken(`${uniq('d')}@gmail.com`), { name: '', mobile: '1', district: '', city: '' }, 400],
+    };
+    for (const [why, [token, body, want]] of Object.entries(cases)) {
+      const d = new Device();
+      const r = await d.post('/api/auth/google/signup', { idToken: token, ...body });
+      assert.equal(r.status, want, `${why}: got ${r.status} ${r.text}`);
+      assert.equal((await d.get('/api/state')).json.me, null, `${why}: no session`);
+    }
+  });
+
+  test('a photo that is not a real image is dropped at sign-up', async () => {
+    const r = await new Device().post('/api/auth/google/signup', { idToken: googleToken(`${uniq('p')}@gmail.com`), ...details({ photo: 'x" onerror="alert(1)' }) });
+    assert.equal(r.status, 200, r.text);
+    assert.equal(meOf(r).photo, null);
+  });
+
   test('other Moi Point staff cannot reach the staff side through Google', async () => {
     assert.equal((await google(googleToken('finance@moipoint.in'))).status, 403);
   });
@@ -219,22 +262,34 @@ describe('Google sign-in in the browser', () => {
     await d.close();
   });
 
-  test('a new person from Google signs up the usual way, with their email filled in', async () => {
+  test('a new person taps Google on sign-up, fills in Your details, and lands in their own new account', async () => {
     const email = `${uniq('fresh')}@gmail.com`;
     const d = await phone({ token: googleToken(email) });
+    await d.p.goto(`${BASE}/signup`, { waitUntil: 'domcontentloaded' });
+    await d.p.waitForSelector('[data-act=googleLogin]');
+    await d.p.click('[data-act=googleLogin]');
+    await d.p.waitForSelector('form[data-form=signup] #su_mob');
+    assert.equal(await d.p.locator('#o_mobile, #otp_code').count(), 0, 'no mobile code step');
+    assert.equal(await d.p.inputValue('#su_email'), email);
+    assert.equal(await d.p.locator('#su_email').getAttribute('readonly'), '', 'the Google email cannot be changed');
+    assert.equal(await d.p.inputValue('#su_name'), 'Google Person');
+    assert.equal(await d.p.locator('#su_pw').isVisible(), false, 'no password: they sign in with Google');
+    await d.p.fill('#su_mob', mobile());
+    await d.p.fill('#su_city', 'Madurai');
+    await d.p.check('#su_terms');
+    await d.p.click('form[data-form=signup] button.btn-primary');
+    await d.until(`location.hash==='#dashboard'&&me&&me.email===${JSON.stringify(email)}&&me.role==='admin'`);
+    assert.equal(await d.S('S.accounts.filter(a=>a.owner===me.id).length'), 1, 'their own new account');
+    assert.deepEqual(d.errors, []);
+    await d.close();
+  });
+
+  test('a new person who taps Google on the log-in page gets the same Your details step', async () => {
+    const d = await phone({ token: googleToken(`${uniq('fromlogin')}@gmail.com`) });
     await tapGoogle(d);
     await d.until(`location.hash==='#signup'`);
-    assert.match(await toastText(d), /Sign up below/);
-    await d.p.waitForSelector('#o_mobile');
-    await d.p.fill('#o_mobile', mobile());
-    await d.p.click('form[data-form=otpSend] button.btn-primary');
-    await d.p.waitForSelector('#otp_code');
-    const code = (await d.p.locator('form[data-form=otpVerify] .note.info b').textContent()).match(/\d{6}/)[0];
-    await d.p.fill('#otp_code', code);
-    await d.p.click('form[data-form=otpVerify] button.btn-primary');
-    await d.p.waitForSelector('#su_email');
-    assert.equal(await d.p.inputValue('#su_email'), email);
-    assert.equal(await d.p.inputValue('#su_name'), 'Google Person');
+    await d.p.waitForSelector('form[data-form=signup] #su_mob');
+    assert.match(await toastText(d), /Add your details/);
     await d.close();
   });
 });

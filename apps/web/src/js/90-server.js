@@ -192,15 +192,22 @@ ACT.googleLogin=async b=>{if(!MPS.cfg.google||b.disabled)return;if(!online())ret
     const cred=await m.signInWithPopup(auth,p);const idToken=await cred.user.getIdToken();
     m.signOut(auth).catch(()=>{});/* Moi Point's own session takes over from here, so logout works as it always has */
     const r=await mpApi('/api/auth/google',{idToken,remember});
-    if(r.needsSignup){try{sessionStorage.setItem('mp-gsignup',JSON.stringify({email:r.email,name:r.name||''}))}catch(_){}
-      toast(`No Moi Point account uses ${r.email} yet. Sign up below: your email is filled in.`);return go('signup')}
-    try{sessionStorage.removeItem('mp-gsignup')}catch(_){}
-    await mpLoggedIn(r,remember)}
+    /* a new Google account: Google has proved who they are, so they go straight to "Your details". The token stays in memory only */
+    if(r.needsSignup){MPS.gsign={idToken,email:r.email,name:r.name||''};AUTH.step='profile';toast('Welcome! Add your details to create your Moi Point account.');return go('signup')}
+    MPS.gsign=null;await mpLoggedIn(r,remember)}
   catch(e){toast(MP_GERR[e&&e.code]||(e&&e.status&&e.message)||'Google sign-in failed. Please try again.','bad')}
   finally{if(document.body.contains(b)){b.disabled=false;b.innerHTML=label}}};
-/* a new person who came through Google finds their email already in the sign-up form */
-{const _rg=render;render=function(){const out=_rg.apply(this,arguments);try{const g=JSON.parse(sessionStorage.getItem('mp-gsignup')||'null');
-  if(g&&location.hash==='#signup'){const e=document.getElementById('su_email'),n=document.getElementById('su_name');if(e&&!e.value)e.value=g.email;if(n&&!n.value&&g.name)n.value=g.name}}catch(_){}return out}}
+/* "Your details" for a Google sign-up: the email is Google's and locked, there is no password, and the mobile is asked here instead of by code */
+{const _rg=render;render=function(){const out=_rg.apply(this,arguments);try{const g=MPS.gsign,f=document.querySelector('form[data-form=signup]');
+  if(g&&f&&location.hash==='#signup'&&!f.dataset.google){f.dataset.google='1';
+    const note=f.querySelector('p.small.muted');if(note)note.innerHTML=`Signed in with Google as <b>${esc(g.email)}</b>. Add your details to finish.`;
+    const e=f.querySelector('#su_email');if(e){e.value=g.email;e.readOnly=true;const after=e.closest('.field')?.nextElementSibling;if(after&&after.tagName==='P')after.textContent='You will log in with Continue with Google from next time.'}
+    const n=f.querySelector('#su_name');if(n&&!n.value&&g.name)n.value=g.name;
+    ['su_pw','su_pw2'].forEach(id=>{const x=f.querySelector('#'+id);const w=x&&(x.closest('.field')||x.closest('label'));if(w)w.hidden=true});
+    const pm=f.querySelector('#pwMeter');if(pm)pm.hidden=true;
+    const em=e&&e.closest('.field');if(em)em.insertAdjacentHTML('beforebegin',fld('Mobile number','su_mob','tel',true,'','inputmode="numeric" maxlength="10" placeholder="10-digit mobile" autocomplete="tel"','full'));
+    const steps=document.querySelector('.su-steps');if(steps)steps.hidden=true}}catch(_){}return out}}
+
 
 /* ---------- logging in ---------- */
 function mpFormError(f,field,e){if(field&&f.querySelector('#'+field))needAll(f,[[field,false,e.message]]);else toast(e.message,'bad')}
@@ -237,6 +244,15 @@ FORMS.signup=async f=>{const v=id=>{const el=f.querySelector('#'+id);return el?e
     mpApplyState(r);try{localStorage.setItem(SK,me.id)}catch(_){}AUTH.step='mobile';AUTH.mobile='';AUTH.verified='';AUTH.ticket='';AUTH.sends=0;imgBuf.su_photo=null;
     log(null,'Account created',`${myAcc().name} · ${v('su_city')}, ${v('su_dist')}, ${v('su_state')} · via ${myAcc().source}`);log(null,'Logged in',me.name);save();mpStream();toast(`Welcome, ${first(name)}! From next time, log in with ${email}.`);go('dashboard')}
   catch(e){if(e.status===401){AUTH.step='mobile';toast(e.message,'bad');return render()}mpFormError(f,/email/i.test(e.message)?'su_email':null,e)}finally{un()}};
+/* a Google sign-up sends its details with the Google token instead of a mobile code */
+{const _su=FORMS.signup;FORMS.signup=async f=>{const g=MPS.gsign;if(!g)return _su(f);
+  const v=id=>{const el=f.querySelector('#'+id);return el?el.value.trim():''},name=v('su_name'),mob=normMob(v('su_mob'));
+  if(!needAll(f,[['su_name',!!name,'Enter your name'],['su_mob',mobOk(mob),MOBERR],['su_dist',!!v('su_dist'),'Add your district'],['su_city',!!v('su_city'),'Add your city or town'],['su_terms',f.querySelector('#su_terms').checked,'Please agree to the terms to continue']]))return;
+  const un=mpLock(f);
+  try{const r=await mpApi('/api/auth/google/signup',{idToken:g.idToken,name,mobile:mob,kind:v('su_kind'),biz:v('su_biz'),state:v('su_state'),district:v('su_dist'),city:v('su_city'),source:v('su_src'),photo:imgBuf.su_photo||null,lang:UIL==='ta'?'ta':'en'});
+    MPS.gsign=null;AUTH.step='mobile';imgBuf.su_photo=null;await mpLoggedIn(r,true);
+    try{log(null,'Account created',`${myAcc().name} · ${v('su_city')}, ${v('su_dist')}, ${v('su_state')} · via Google`);save()}catch(_){}toast(`Welcome, ${first(name)}! From next time, tap Continue with Google to log in.`)}
+  catch(e){un();if(e.status===401){MPS.gsign=null;AUTH.step='mobile';toast('Your Google sign-in timed out. Tap Continue with Google again.','bad');return render()}toast(e.message,'bad')}}}
 
 /* ---------- forgot password ---------- */
 FORMS.fpFind=async f=>{const e=f.querySelector('#fp_email').value.trim().toLowerCase(),ok=/^[^\s@]+@[^\s@]+\.[a-z]{2,}$/i.test(e);

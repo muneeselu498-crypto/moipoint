@@ -9,6 +9,7 @@ import { OtpService } from './otp.service';
 import { PrismaService } from './prisma.service';
 import { inAccessWindow, Scope, ScopeService } from './scope.service';
 import { AuthedRequest, SessionService } from './session';
+import { isDataImage } from './storage.service';
 import { SyncService } from './sync.service';
 import { addDays, checkPassword, emailOk, fail, hashPassword, mobOk, normMob, pwHintFields, pwOk, PW_RULE, today, uid } from './util';
 import { addCredits, emptyWallet, walletSync } from './wallet';
@@ -190,8 +191,52 @@ export class AuthController {
     if (upgrade && upgrade.status !== 'active') fail('This login is disabled. Ask the admin to enable it.', 403);
 
     const passwordHash = await hashPassword(b.password);
-    const hint = pwHintFields(b.password);
-    const userId = await this.prisma.$transaction(async (tx) => {
+    const userId = await this.openAccount({ email, mobile, passwordHash, hint: pwHintFields(b.password), upgrade, b, by: 'Sign-up' });
+    await this.sessions.start(res, userId, true);
+    const u = await this.prisma.user.findUnique({ where: { id: userId } });
+    return this.stateFor(await this.scopes.forUser(u));
+  }
+
+  /**
+   * Creating an account with Google. Google has already proved the email, so there is no mobile code step:
+   * the person fills in "Your details" and gets their own new family account, like any other sign-up.
+   */
+  @UseGuards(ThrottlerGuard)
+  @Throttle({ default: { limit: LIMIT, ttl: 60000 } })
+  @Post('auth/google/signup')
+  @HttpCode(200)
+  async googleSignup(@Body() body: unknown, @Res({ passthrough: true }) res: Response) {
+    const b = parse(
+      z.object({
+        idToken: z.string().min(20).max(8000), name: z.string().trim().min(1).max(120), mobile: z.string().max(20),
+        kind: z.string().max(40).optional(), biz: z.string().max(120).optional(), state: z.string().max(60).optional(), district: z.string().trim().min(1).max(60),
+        city: z.string().trim().min(1).max(60), source: z.string().max(60).optional(), photo: z.string().nullable().optional(), lang: z.string().max(8).optional(),
+      }),
+      body,
+    );
+    const g = await this.firebase.verify(b.idToken);
+    if (!g.email || !g.emailVerified) fail('Your Google account’s email isn’t verified yet. Verify it with Google, then try again.', 403);
+    if (cfg.masterAdminEmail && g.email === cfg.masterAdminEmail) fail('This Google account is Moi Point’s Master Admin. Use Continue with Google on the log-in page.', 409);
+    const mobile = normMob(b.mobile);
+    if (!mobOk(mobile)) fail('Enter a valid 10-digit mobile number (starts with 6, 7, 8 or 9)');
+    if (await this.prisma.user.findFirst({ where: { email: g.email, deleted: false, status: { not: 'deleted' } } })) {
+      fail('This Google account already has a Moi Point login. Continue with Google on the log-in page.', 409);
+    }
+    if (await this.prisma.user.findFirst({ where: { mobile, deleted: false, status: { not: 'deleted' }, role: { not: 'platform' } } })) {
+      fail('This mobile number is already used by another login. Use a different number.', 409);
+    }
+    const userId = await this.openAccount({ email: g.email, mobile, passwordHash: null, hint: {}, upgrade: null, b, by: 'Google sign-up' });
+    await this.sessions.start(res, userId, true);
+    const u = await this.prisma.user.findUnique({ where: { id: userId } });
+    return this.stateFor(await this.scopes.forUser(u));
+  }
+
+  /** Creates a family's account and its Owner login. Both sign-up routes use this, so they always match. */
+  private openAccount(o: { email: string; mobile: string; passwordHash: string | null; hint: object; upgrade: any; b: any; by: string }) {
+    const { email, mobile, passwordHash, hint, upgrade, b } = o;
+    // the photo goes straight into pages others open, so only a real image is kept
+    const photo = typeof b.photo === 'string' && isDataImage(b.photo) ? b.photo : null;
+    return this.prisma.$transaction(async (tx) => {
       const rev = await this.messages.bump(tx);
       const pricing: any = (await tx.platformDoc.findUnique({ where: { key: 'pricing' } }))?.data ?? {};
       const freeDays = Number((await tx.platformDoc.findUnique({ where: { key: 'freeDays' } }))?.data ?? 365);
@@ -203,7 +248,7 @@ export class AuthController {
       const t = today();
       const userData = {
         ...((upgrade?.data as object) ?? {}), id, acc: accId, name: b.name, email, mobile, username: email, role: 'admin', status: 'active',
-        photo: b.photo ?? (upgrade?.data as any)?.photo ?? null, ...hint,
+        photo: photo ?? (upgrade?.data as any)?.photo ?? null, ...hint,
         ...(upgrade ? { helperFrom: upgrade.accountId, oldUser: upgrade.username !== email ? upgrade.username : (upgrade.data as any)?.oldUser } : {}),
       };
       const row = { accountId: accId, email, username: email, mobile, role: 'admin', status: 'active', passwordHash, data: userData, rev };
@@ -224,13 +269,10 @@ export class AuthController {
       if (trial) await tx.creditTxn.create({ data: { accountId: accId, qty: trial, kind: 'Welcome credits', ref: 'WELCOME' } });
       const subsDoc = await tx.platformDoc.findUnique({ where: { key: 'subs' } });
       const subs: any[] = Array.isArray(subsDoc?.data) ? (subsDoc!.data as any[]) : [];
-      subs.push({ id: uid('s'), acc: accId, from: defaultPlan, to: defaultPlan, amount: 0, at: Date.now(), by: 'Sign-up', start: t, end: sub.end, period: 'free', kind: 'Started' });
+      subs.push({ id: uid('s'), acc: accId, from: defaultPlan, to: defaultPlan, amount: 0, at: Date.now(), by: o.by, start: t, end: sub.end, period: 'free', kind: 'Started' });
       await tx.platformDoc.upsert({ where: { key: 'subs' }, create: { key: 'subs', data: subs, rev }, update: { data: subs, rev } });
       return id;
     });
-    await this.sessions.start(res, userId, true);
-    const u = await this.prisma.user.findUnique({ where: { id: userId } });
-    return this.stateFor(await this.scopes.forUser(u));
   }
 
   // ---------- forgot password: email, registered mobile, code, new password ----------
