@@ -161,6 +161,18 @@ describe('Google sign-in in the browser', () => {
     await d.close();
   });
 
+  test('the sign-up page offers it too, and an existing account signs straight in from there', async () => {
+    const c = await newCustomer('Signup Page Family');
+    const d = await phone({ token: googleToken(c.email) });
+    await d.p.goto(`${BASE}/signup`, { waitUntil: 'domcontentloaded' });
+    await d.p.waitForSelector('#o_mobile');
+    await d.p.waitForSelector('[data-act=googleLogin]');
+    await d.p.click('[data-act=googleLogin]');
+    await d.until(`location.hash==='#dashboard'&&me&&me.id===${JSON.stringify(c.state.me)}`);
+    assert.deepEqual(d.errors, []);
+    await d.close();
+  });
+
   test('A and D: the Master Admin lands on /admin, and stays signed in after a reload', async () => {
     const d = await phone({ token: googleToken(MASTER_EMAIL) });
     await tapGoogle(d);

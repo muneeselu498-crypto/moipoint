@@ -182,8 +182,10 @@ async function mpFirebase(){if(mpFb)return mpFb;const [app,auth]=await Promise.a
 const MP_GERR={'auth/popup-closed-by-user':'Google sign-in was closed before it finished.','auth/cancelled-popup-request':'Google sign-in was closed before it finished.','auth/user-cancelled':'Google sign-in was cancelled.',
   'auth/popup-blocked':'Your browser blocked the Google window. Allow pop-ups for this site, then try again.','auth/network-request-failed':'No internet. Connect and try again.',
   'auth/unauthorized-domain':'Google sign-in isn’t allowed on this address yet. Moi Point needs to add it in Firebase.'};
-{const _vg=vLogin;vLogin=function(){const h=_vg();if(!MPS.cfg.google)return h;
-  return h.replace('</form>',`</form><p class="small muted center" style="margin:2px 0">or</p><button type="button" class="btn btn-ghost btn-block" data-act="googleLogin" style="min-height:52px;gap:10px">${MP_GLOGO}Continue with Google</button>`)}}
+const mpGBtn=()=>`<p class="small muted center" style="margin:2px 0">or</p><button type="button" class="btn btn-ghost btn-block" data-act="googleLogin" style="min-height:52px;gap:10px">${MP_GLOGO}Continue with Google</button>`;
+{const _vg=vLogin;vLogin=function(){const h=_vg();if(!MPS.cfg.google)return h;return h.replace('</form>',`</form>${mpGBtn()}`)}}
+/* on sign-up too: an existing account signs straight in, and a new person carries on with their email filled in */
+{const _vs=vSignup;vSignup=function(){const h=_vs();if(!MPS.cfg.google||AUTH.step!=='mobile')return h;return h.replace(/(<form[^>]*data-form="otpSend"[\s\S]*?<\/form>)/,`$1${mpGBtn()}`)}}
 ACT.googleLogin=async b=>{if(!MPS.cfg.google||b.disabled)return;if(!online())return toast('No internet. Connect and try again.','bad');
   const rem=document.getElementById('l_rem'),remember=!rem||rem.checked,label=b.innerHTML;b.disabled=true;b.textContent='Signing in…';
   try{const {auth,m}=await mpFirebase();const p=new m.GoogleAuthProvider();p.setCustomParameters({prompt:'select_account'});
