@@ -3,6 +3,7 @@ import { Throttle, ThrottlerGuard } from '@nestjs/throttler';
 import type { Response } from 'express';
 import { z } from 'zod';
 import { cfg, publicBase } from './config';
+import { FirebaseService } from './firebase.service';
 import { MessagesService } from './messages.service';
 import { OtpService } from './otp.service';
 import { PrismaService } from './prisma.service';
@@ -28,10 +29,11 @@ export class AuthController {
     private otp: OtpService,
     private messages: MessagesService,
     private sync: SyncService,
+    private firebase: FirebaseService,
   ) {}
 
   private clientCfg() {
-    return { devTools: cfg.devTools, messages: cfg.messageProvider, payments: cfg.paymentProvider, base: publicBase() };
+    return { devTools: cfg.devTools, messages: cfg.messageProvider, payments: cfg.paymentProvider, base: publicBase(), google: this.firebase.webConfig() };
   }
 
   private async stateFor(scope: Scope, extra: object = {}) {
@@ -76,6 +78,52 @@ export class AuthController {
     await this.refuseLogin(u);
     await this.sessions.start(res, u!.id, b.remember !== false);
     return this.stateFor(await this.scopes.forUser(u));
+  }
+
+  /**
+   * Sign in with Google. The browser hands over the token Google gave it, the server checks it, and then
+   * opens the same session a password login does, so every existing protection still applies.
+   * Who is Master Admin is decided here, from the server's own setting, never from the browser.
+   */
+  @UseGuards(ThrottlerGuard)
+  @Throttle({ default: { limit: LIMIT, ttl: 60000 } })
+  @Post('auth/google')
+  @HttpCode(200)
+  async google(@Body() body: unknown, @Res({ passthrough: true }) res: Response) {
+    const b = parse(z.object({ idToken: z.string().min(20).max(8000), remember: z.boolean().optional() }), body);
+    const g = await this.firebase.verify(b.idToken);
+    if (!g.email || !g.emailVerified) fail('Your Google account’s email isn’t verified yet. Verify it with Google, then try again.', 403);
+    const master = !!cfg.masterAdminEmail && g.email === cfg.masterAdminEmail;
+    let u = await this.prisma.user.findFirst({ where: { email: g.email, deleted: false, status: { not: 'deleted' } } });
+    if (master) {
+      if (u && u.role !== 'platform') fail('This Google account already has a customer login. Ask Moi Point support to move it.', 409);
+      u = u ? await this.makeOwner(u) : await this.createOwner(g.email, g.name);
+    } else {
+      // a new person signs up the usual way, with their email already filled in
+      if (!u) return { needsSignup: true, email: g.email, name: g.name };
+      // only the one Master Admin reaches Moi Point's staff side through Google; other staff use their password
+      if (u.role === 'platform') fail('Moi Point staff sign in with their email and password.', 403);
+    }
+    await this.refuseLogin(u);
+    await this.sessions.start(res, u!.id, b.remember !== false);
+    return this.stateFor(await this.scopes.forUser(u));
+  }
+
+  private createOwner(email: string, name: string) {
+    return this.prisma.$transaction(async (tx) => {
+      const rev = await this.messages.bump(tx);
+      const id = uid('p');
+      const data = { id, name: name || 'Master Admin', email, username: email, role: 'platform', prole: 'owner', status: 'active' };
+      return tx.user.create({ data: { id, accountId: null, email, username: email, mobile: null, role: 'platform', platformRole: 'owner', status: 'active', passwordHash: null, data, rev } });
+    });
+  }
+
+  private makeOwner(u: any) {
+    if (u.platformRole === 'owner') return u;
+    return this.prisma.$transaction(async (tx) => {
+      const rev = await this.messages.bump(tx);
+      return tx.user.update({ where: { id: u.id }, data: { platformRole: 'owner', data: { ...(u.data as object), prole: 'owner' }, rev } });
+    });
   }
 
   @Post('auth/logout')

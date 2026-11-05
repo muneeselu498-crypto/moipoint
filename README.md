@@ -86,6 +86,14 @@ A real install starts with no logins. Add the first Master Admin with the comman
 npm run admin:create -- "Full Name" name@example.com 9876543210
 ```
 
+## Sign in with Google
+
+The login page shows **Continue with Google** once the four `FIREBASE_*` settings are filled in `apps/api/.env`. Google gives the browser a token, and the server checks it against Google's published keys: the signature, the project, the time and a verified email. Then it opens the same session a password login does.
+
+The Google account in `MASTER_ADMIN_EMAIL` becomes the one Owner and opens Master Admin (`/admin`). Nobody else can be given the Owner role. Any other Google account opens its own dashboard if that email already has a login, or goes to sign-up with the email filled in. Password login stays as it was.
+
+In the Firebase console: turn on **Authentication > Sign-in method > Google**, and add every address the page is served from under **Authentication > Settings > Authorized domains**.
+
 ## Deploying
 
 Simplest: put everything on one server. The server already delivers the page and the data from one address.

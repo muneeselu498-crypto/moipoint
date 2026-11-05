@@ -36,6 +36,16 @@ export const cfg = {
   webDist: path.resolve(__dirname, '../../web/dist'),
   uploadDir: path.resolve(__dirname, '../uploads'),
   secureCookie: (process.env.PUBLIC_URL || '').startsWith('https://'),
+  /** The one Google account that is Moi Point's Master Admin. Set only on the server, so nothing in a browser can change it. */
+  masterAdminEmail: String(process.env.MASTER_ADMIN_EMAIL || '').trim().toLowerCase(),
+  /** Google sign-in through Firebase. The web values are public; nothing secret is needed to check sign-ins. */
+  firebase: {
+    projectId: process.env.FIREBASE_PROJECT_ID || '',
+    apiKey: process.env.FIREBASE_API_KEY || '',
+    authDomain: process.env.FIREBASE_AUTH_DOMAIN || '',
+    appId: process.env.FIREBASE_APP_ID || '',
+    certsUrl: process.env.FIREBASE_CERTS_URL || 'https://www.googleapis.com/service_accounts/v1/jwk/securetoken@system.gserviceaccount.com',
+  },
 };
 
 /** The address printed in QR codes. On a laptop that means the Wi-Fi address, so a phone can scan it. */

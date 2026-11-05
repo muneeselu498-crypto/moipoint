@@ -375,6 +375,10 @@ export class SyncService {
       }
     }
 
+    // with a Master Admin set on the server, nobody else can be given the Owner role
+    if (role === 'platform' && platformRole === 'owner' && cfg.masterAdminEmail && email !== cfg.masterAdminEmail) {
+      return this.no('users', id, 'Only the Master Admin can have the Owner role.', before, s);
+    }
     const username = String(d.username || email || id).toLowerCase();
     if (status !== 'deleted') {
       const clash = await tx.user.findFirst({ where: { id: { not: id }, deleted: false, OR: [...(email ? [{ email }] : []), { username }] } });

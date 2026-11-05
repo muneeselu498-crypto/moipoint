@@ -172,6 +172,34 @@ function mpDevLink(){let a=document.getElementById('mpDev');if(!MPS.cfg.devTools
 /* demo logins are for testing only */
 {const _vl=vLogin;vLogin=function(){const h=_vl();return MPS.cfg.devTools?h:h.replace(/<div><p class="small muted" style="margin-bottom:8px">Demo accounts[\s\S]*?<\/button><\/div><\/div>/,'')}}
 
+/* ---------- Sign in with Google (Firebase). The server checks every sign-in, and only the server decides who is Master Admin ---------- */
+const MP_FB='https://www.gstatic.com/firebasejs/10.12.2/';
+const MP_GLOGO='<svg width="18" height="18" viewBox="0 0 48 48" aria-hidden="true"><path fill="#FFC107" d="M43.6 20.5H42V20H24v8h11.3C33.7 32.7 29.2 36 24 36c-6.6 0-12-5.4-12-12s5.4-12 12-12c3.1 0 5.8 1.2 7.9 3.1l5.7-5.7C34 6.1 29.3 4 24 4 12.9 4 4 12.9 4 24s8.9 20 20 20 20-8.9 20-20c0-1.3-.1-2.4-.4-3.5z"/><path fill="#FF3D00" d="m6.3 14.7 6.6 4.8C14.7 15.1 19 12 24 12c3.1 0 5.8 1.2 7.9 3.1l5.7-5.7C34 6.1 29.3 4 24 4 16.3 4 9.7 8.3 6.3 14.7z"/><path fill="#4CAF50" d="M24 44c5.2 0 9.9-2 13.4-5.2l-6.2-5.2c-2 1.5-4.5 2.4-7.2 2.4-5.2 0-9.6-3.3-11.3-7.9l-6.5 5C9.5 39.6 16.2 44 24 44z"/><path fill="#1976D2" d="M43.6 20.5H42V20H24v8h11.3c-.8 2.2-2.2 4.2-4.1 5.6l6.2 5.2C37 39.2 44 34 44 24c0-1.3-.1-2.4-.4-3.5z"/></svg>';
+let mpFb=null;
+/* the Google library loads only when someone taps the button, so the page stays as quick as before */
+async function mpFirebase(){if(mpFb)return mpFb;const [app,auth]=await Promise.all([import(MP_FB+'firebase-app.js'),import(MP_FB+'firebase-auth.js')]);
+  const a=app.getApps().length?app.getApp():app.initializeApp(MPS.cfg.google);mpFb={auth:auth.getAuth(a),m:auth};return mpFb}
+const MP_GERR={'auth/popup-closed-by-user':'Google sign-in was closed before it finished.','auth/cancelled-popup-request':'Google sign-in was closed before it finished.','auth/user-cancelled':'Google sign-in was cancelled.',
+  'auth/popup-blocked':'Your browser blocked the Google window. Allow pop-ups for this site, then try again.','auth/network-request-failed':'No internet. Connect and try again.',
+  'auth/unauthorized-domain':'Google sign-in isn’t allowed on this address yet. Moi Point needs to add it in Firebase.'};
+{const _vg=vLogin;vLogin=function(){const h=_vg();if(!MPS.cfg.google)return h;
+  return h.replace('</form>',`</form><p class="small muted center" style="margin:2px 0">or</p><button type="button" class="btn btn-ghost btn-block" data-act="googleLogin" style="min-height:52px;gap:10px">${MP_GLOGO}Continue with Google</button>`)}}
+ACT.googleLogin=async b=>{if(!MPS.cfg.google||b.disabled)return;if(!online())return toast('No internet. Connect and try again.','bad');
+  const rem=document.getElementById('l_rem'),remember=!rem||rem.checked,label=b.innerHTML;b.disabled=true;b.textContent='Signing in…';
+  try{const {auth,m}=await mpFirebase();const p=new m.GoogleAuthProvider();p.setCustomParameters({prompt:'select_account'});
+    const cred=await m.signInWithPopup(auth,p);const idToken=await cred.user.getIdToken();
+    m.signOut(auth).catch(()=>{});/* Moi Point's own session takes over from here, so logout works as it always has */
+    const r=await mpApi('/api/auth/google',{idToken,remember});
+    if(r.needsSignup){try{sessionStorage.setItem('mp-gsignup',JSON.stringify({email:r.email,name:r.name||''}))}catch(_){}
+      toast(`No Moi Point account uses ${r.email} yet. Sign up below: your email is filled in.`);return go('signup')}
+    try{sessionStorage.removeItem('mp-gsignup')}catch(_){}
+    await mpLoggedIn(r,remember)}
+  catch(e){toast(MP_GERR[e&&e.code]||(e&&e.status&&e.message)||'Google sign-in failed. Please try again.','bad')}
+  finally{if(document.body.contains(b)){b.disabled=false;b.innerHTML=label}}};
+/* a new person who came through Google finds their email already in the sign-up form */
+{const _rg=render;render=function(){const out=_rg.apply(this,arguments);try{const g=JSON.parse(sessionStorage.getItem('mp-gsignup')||'null');
+  if(g&&location.hash==='#signup'){const e=document.getElementById('su_email'),n=document.getElementById('su_name');if(e&&!e.value)e.value=g.email;if(n&&!n.value&&g.name)n.value=g.name}}catch(_){}return out}}
+
 /* ---------- logging in ---------- */
 function mpFormError(f,field,e){if(field&&f.querySelector('#'+field))needAll(f,[[field,false,e.message]]);else toast(e.message,'bad')}
 const mpLock=f=>{const b=f.querySelector('button.btn-primary,button:not([type=button])');if(b)b.disabled=true;return ()=>{if(b)b.disabled=false}};
@@ -243,7 +271,10 @@ async function mpImpersonate(u){try{const by=me.id;log(null,'Support view opened
 ACT.impExit=async()=>{try{const A=myAcc();log(null,'Support view closed',A?A.name:'');save();await mpPush();const r=await mpApi('/api/admin/impersonate/exit',{});mpApplyState(r);try{sessionStorage.removeItem('mp-imp');sessionStorage.setItem(SK,me.id);localStorage.removeItem(SK)}catch(_){}mpStream();go('admin-accounts')}catch(e){toast(e.message,'bad')}};
 
 /* ---------- links: the printed QR opens /EV050, so that address has to land on the event's own page ---------- */
-(function(){try{const m=location.pathname.match(/^\/([a-z0-9-]{4,40})\/?$/i);if(!m||location.hash)return;const k=m[1],no=/^ev-?\d+$|^ev-\d{4}-\d+$/i.test(k);if(no||(/^[a-z0-9]{8,}$/i.test(k)&&/\d/.test(k)))history.replaceState(null,'','/#'+(no?k:'pay-'+k))}catch(e){}})();
+(function(){try{const m=location.pathname.match(/^\/([a-z0-9-]{4,40})\/?$/i);if(!m||location.hash)return;const k=m[1],page={admin:'admin',login:'login',signup:'signup'}[k.toLowerCase()];
+  /* /admin opens Master Admin. The app's own screens still decide who may see it, and the server decides what they get */
+  if(page)return history.replaceState(null,'','/#'+page);
+  const no=/^ev-?\d+$|^ev-\d{4}-\d+$/i.test(k);if(no||(/^[a-z0-9]{8,}$/i.test(k)&&/\d/.test(k)))history.replaceState(null,'','/#'+(no?k:'pay-'+k))}catch(e){}})();
 /* QR codes point at this server, so a phone can scan them during testing and on any host */
 {const _mq=mountQR;mountQR=function(scope){const b=window.MP_BASE;if(b)(scope||document).querySelectorAll('[data-qr^="https://moipoint.in/"]').forEach(el=>{el.dataset.qr=b+el.dataset.qr.slice(19)});return _mq(scope)}}
 ACT.c3pay=()=>{const f=document.querySelector('form[data-form=pub]');if(f)f.scrollIntoView({behavior:'smooth'})};

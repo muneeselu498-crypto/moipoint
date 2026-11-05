@@ -35,13 +35,13 @@ const hashes = [...html.matchAll(/<script(?![^>]*\bsrc=)[^>]*>([\s\S]*?)<\/scrip
 );
 const policy = [
   "default-src 'self'",
-  `script-src 'self' ${hashes.join(' ')}`,
+  `script-src 'self' ${hashes.join(' ')} https://www.gstatic.com/firebasejs/10.12.2/ https://apis.google.com`,
   "style-src 'self' 'unsafe-inline' https://fonts.googleapis.com",
   "font-src 'self' data: https://fonts.gstatic.com",
   "img-src 'self' data: blob: https:",
   "media-src 'self' data: blob: https:",
-  "connect-src 'self' data: blob:",
-  'frame-src https://www.youtube-nocookie.com https://player.vimeo.com https://www.google.com',
+  "connect-src 'self' data: blob: https://identitytoolkit.googleapis.com https://securetoken.googleapis.com",
+  'frame-src https://www.youtube-nocookie.com https://player.vimeo.com https://www.google.com https://*.firebaseapp.com https://*.web.app',
   "worker-src 'self'",
   "object-src 'none'",
   "base-uri 'none'",

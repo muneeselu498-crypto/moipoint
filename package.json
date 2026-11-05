@@ -21,7 +21,8 @@
     "test:prod": "node scripts/test.mjs prod",
     "admin:create": "cd apps/api && npx ts-node --transpile-only prisma/create-admin.ts",
     "test:tenant": "node scripts/test.mjs tenant",
-    "build:vercel": "node apps/web/vercel-build.mjs"
+    "build:vercel": "node apps/web/vercel-build.mjs",
+    "test:google": "node scripts/test.mjs google"
   },
   "devDependencies": {
     "playwright-core": "^1.64.1"

@@ -1,3 +1,5 @@
+import { createSign, generateKeyPairSync, randomUUID } from 'node:crypto';
+import http from 'node:http';
 export const BASE = process.env.BASE || 'http://localhost:4610';
 
 /** One device: keeps its own login cookie, like a phone or laptop would. */
@@ -70,3 +72,38 @@ export const moiRecord = (eventId, over = {}) => {
   const id = uniq('m');
   return { id, code: `EV000/${String(Math.floor(Math.random() * 900) + 100)}`, event_id: eventId, c: { name: 'Test Guest', mobile: '', place: 'Madurai', relationship: 'Friend' }, amount: 1001, mode: 'cash', status: 'received', date: '2026-11-04', time: '10:00', created_at: Date.now(), kind: 'cash', gift: null, est: 0, ...over };
 };
+
+/* ---------- a stand-in for Google, so Google sign-in can be tested without a real Google account ---------- */
+// The server is pointed at FIREBASE_CERTS_URL, which this serves with a key made fresh for each test run.
+// Tokens signed with it pass the same checks a real Firebase token does: signature, project, issuer, time and email.
+export const FIREBASE_PROJECT = 'moipoint-test';
+export const MASTER_EMAIL = 'muneeselu498@gmail.com';
+const google = generateKeyPairSync('rsa', { modulusLength: 2048 });
+const KID = `test-${randomUUID()}`;
+let keyServer = null;
+
+/** Starts publishing this run's signing key. Safe to call more than once. */
+export async function googleKeys() {
+  if (keyServer) return;
+  keyServer = http.createServer((_req, res) => {
+    res.setHeader('content-type', 'application/json');
+    res.setHeader('cache-control', 'public, max-age=60');
+    res.end(JSON.stringify({ keys: [{ ...google.publicKey.export({ format: 'jwk' }), kid: KID, alg: 'RS256', use: 'sig' }] }));
+  });
+  await new Promise((ok) => keyServer.listen(Number(process.env.FIREBASE_CERTS_PORT || 4614), '127.0.0.1', ok));
+  keyServer.unref();
+}
+
+/** A Firebase ID token for this email, as Google would issue it. `over` changes any claim, to make a bad one. */
+export function googleToken(email, over = {}, signWith = google.privateKey) {
+  const now = Math.floor(Date.now() / 1000);
+  const b64 = (o) => Buffer.from(JSON.stringify(o)).toString('base64url');
+  const claims = {
+    iss: `https://securetoken.google.com/${FIREBASE_PROJECT}`, aud: FIREBASE_PROJECT, auth_time: now, iat: now, exp: now + 3600,
+    sub: `uid-${email}`, user_id: `uid-${email}`, email, email_verified: true, name: 'Google Person',
+    firebase: { sign_in_provider: 'google.com', identities: { email: [email] } }, ...over,
+  };
+  const data = `${b64({ alg: 'RS256', kid: KID, typ: 'JWT' })}.${b64(claims)}`;
+  return `${data}.${createSign('RSA-SHA256').update(data).sign(signWith).toString('base64url')}`;
+}
+export const otherKey = () => generateKeyPairSync('rsa', { modulusLength: 2048 }).privateKey;

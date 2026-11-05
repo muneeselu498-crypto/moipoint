@@ -12,7 +12,7 @@ const api = path.join(root, 'apps/api');
 const PORT = 4610;
 const DB = 'moipoint_test';
 const url = `postgresql://moipoint@localhost:5544/${DB}`;
-const env = { ...process.env, DATABASE_URL: url, PORT: String(PORT), HOST: '127.0.0.1', DEV_TOOLS: '1', SEED_DEMO: '1', MESSAGE_PROVIDER: 'dev', PAYMENT_PROVIDER: 'simulate', PUBLIC_URL: `http://localhost:${PORT}` };
+const env = { ...process.env, DATABASE_URL: url, PORT: String(PORT), HOST: '127.0.0.1', DEV_TOOLS: '1', SEED_DEMO: '1', MESSAGE_PROVIDER: 'dev', PAYMENT_PROVIDER: 'simulate', FIREBASE_PROJECT_ID: 'moipoint-test', FIREBASE_API_KEY: 'test-api-key', FIREBASE_AUTH_DOMAIN: 'moipoint-test.firebaseapp.com', FIREBASE_APP_ID: '1:000:web:test', FIREBASE_CERTS_URL: 'http://127.0.0.1:4614/keys', MASTER_ADMIN_EMAIL: 'muneeselu498@gmail.com', PUBLIC_URL: `http://localhost:${PORT}` };
 const sh = process.platform === 'win32';
 
 execFileSync('node', ['scripts/db.mjs', 'start'], { cwd: root, stdio: 'inherit' });
@@ -55,8 +55,8 @@ for (let i = 0; i < 60; i++) {
 }
 
 const which = process.argv[2];
-const sets = { api: ['tests/api.test.mjs'], tenant: ['tests/tenant.test.mjs'], ui: ['tests/ui.test.mjs'], prod: ['tests/prod.test.mjs'] };
-const files = sets[which] ?? [...sets.api, ...sets.tenant, ...sets.ui, ...sets.prod];
+const sets = { api: ['tests/api.test.mjs'], tenant: ['tests/tenant.test.mjs'], google: ['tests/google.test.mjs'], ui: ['tests/ui.test.mjs'], prod: ['tests/prod.test.mjs'] };
+const files = sets[which] ?? [...sets.api, ...sets.tenant, ...sets.google, ...sets.ui, ...sets.prod];
 const only = process.argv[3] ? [`--test-name-pattern=${process.argv[3]}`] : [];
 const run = spawnSync('node', ['--test', '--test-concurrency=1', ...only, ...files], { cwd: root, env: { ...env, BASE: `http://localhost:${PORT}`, PROD_BASE: `http://localhost:${PROD_PORT}`, PROD_DATABASE_URL: prodUrl, PROVIDER_PORT: String(PROVIDER_PORT) }, stdio: 'inherit' });
 stop();

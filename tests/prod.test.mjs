@@ -177,10 +177,11 @@ describe('with testing tools off', () => {
     await ctx.close();
   });
 
-  test('a real install gets its first Master Admin from one command', async () => {
-    const email = `first${Date.now()}@example.com`;
+  test('a real install gets its first Master Admin from one command, and only that one', async () => {
+    const email = process.env.MASTER_ADMIN_EMAIL;
     const args = ['run', '--silent', 'admin:create', '--', 'FirstAdmin', email, number()];
     const opts = { env: { ...process.env, DATABASE_URL: process.env.PROD_DATABASE_URL }, shell: process.platform === 'win32' };
+    await assert.rejects(run('npm', ['run', '--silent', 'admin:create', '--', 'Someone', `other${Date.now()}@example.com`, number()], opts), 'any other email must be refused');
     const { stdout } = await run('npm', args, opts);
     const password = stdout.match(/Password: (\S+)/)[1];
     const r = await post('/api/auth/login', { email, password });

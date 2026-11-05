@@ -20,6 +20,12 @@ async function main() {
     process.exitCode = 1;
     return;
   }
+  const master = String(process.env.MASTER_ADMIN_EMAIL || '').trim().toLowerCase();
+  if (master && email !== master) {
+    console.error(`Only ${master} can be the Master Admin on this server. Add other staff from inside Master Admin.`);
+    process.exitCode = 1;
+    return;
+  }
   const prisma = new PrismaClient();
   try {
     if (await prisma.user.findFirst({ where: { OR: [{ email }, { username: email }] } })) {
